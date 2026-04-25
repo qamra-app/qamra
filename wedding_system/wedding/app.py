@@ -118,7 +118,8 @@ def whatsapp_webhook():
             links = "\n\n".join([f"📷 {l}" for l in matched[:10]])
             msg.body(f"✅ وجدت {len(matched)} صورة لك!\n\n{links}")
     except Exception as e:
-        msg.body("⚠️ حدث خطأ. حاول مرة ثانية.")
+    print(f"ERROR: {str(e)}", flush=True)
+    msg.body(f"⚠️ خطأ: {str(e)}")
     return str(resp)
 
 @app.route("/")
