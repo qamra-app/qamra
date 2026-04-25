@@ -84,15 +84,24 @@ def luxand_recognize(image_bytes):
     return matches
 
 def find_photos_for_selfie(selfie_bytes):
-    temp_person_id = luxand_add_photo(selfie_bytes, name="temp_search")
+    # 1. سجّل السيلفي كـ person واحصل على uuid
+    enroll_resp = luxand_add_photo(selfie_bytes, name="temp_search")
+    person_uuid = enroll_resp
+    print(f"Enrolled person UUID: {person_uuid}", flush=True)
+
     matched_links = []
     photos = list_photos_in_folder(GDRIVE_FOLDER_ID)
+    print(f"Total photos in Drive: {len(photos)}", flush=True)
+
     for photo in photos:
         photo_bytes = download_photo_bytes(photo["id"])
-        for m in luxand_recognize(photo_bytes):
-            if m["person_id"] == temp_person_id and m["probability"] >= 0.85:
+        matches = luxand_recognize(photo_bytes)
+        print(f"Photo {photo['name']}: {matches}", flush=True)
+        for m in matches:
+            if m["person_id"] == person_uuid and m["probability"] >= 0.70:
                 matched_links.append(photo.get("webViewLink", ""))
                 break
+
     return list(set(matched_links))
 
 @app.route("/whatsapp", methods=["POST"])
