@@ -58,7 +58,7 @@ def luxand_add_photo(image_bytes, name="guest"):
     resp = requests.post(
         f"{LUXAND_BASE}/v2/person",
         headers={"token": LUXAND_API_KEY},
-        files={"photo": ("selfie.jpg", image_bytes, "image/jpeg")},
+        files={"photos": ("selfie.jpg", image_bytes, "image/jpeg")},
         data={"name": name, "collections": LUXAND_SUBJECT_ID, "store": "1"}
     )
     resp.raise_for_status()
