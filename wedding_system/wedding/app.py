@@ -26,8 +26,17 @@ twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
 
 # ── Google Drive helper ─────────────────────────────────────────────────────
 def get_drive_service():
+    import json
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS")
+    if creds_json:
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            f.write(creds_json)
+            creds_path = f.name
+    else:
+        creds_path = GDRIVE_CREDS_FILE
     creds = service_account.Credentials.from_service_account_file(
-        GDRIVE_CREDS_FILE,
+        creds_path,
         scopes=["https://www.googleapis.com/auth/drive.readonly"]
     )
     return build("drive", "v3", credentials=creds)
