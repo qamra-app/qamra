@@ -1,5 +1,6 @@
 import os
 import io
+import json
 import threading
 import requests
 
@@ -13,20 +14,22 @@ from googleapiclient.http import MediaIoBaseDownload
 # ── Flask App ────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 
-# ── Config (set these in Railway → Variables) ────────────────────────────────
-TWILIO_SID        = os.environ["TWILIO_ACCOUNT_SID"]
-TWILIO_TOKEN      = os.environ["TWILIO_AUTH_TOKEN"]
-TWILIO_WHATSAPP   = os.environ["TWILIO_WHATSAPP_NUMBER"]   # e.g. whatsapp:+14155238886
-FACEPP_API_KEY    = os.environ["FACEPP_API_KEY"]
-FACEPP_API_SECRET = os.environ["FACEPP_API_SECRET"]
-GDRIVE_FOLDER_ID  = os.environ["GDRIVE_FOLDER_ID"]
+# ── Config ───────────────────────────────────────────────────────────────────
+TWILIO_SID              = os.environ["TWILIO_SID"]
+TWILIO_TOKEN            = os.environ["TWILIO_TOKEN"]
+TWILIO_WHATSAPP         = os.environ["TWILIO_WHATSAPP"]
+FACEPP_API_KEY          = os.environ["FACEPP_API_KEY"]
+FACEPP_API_SECRET       = os.environ["FACEPP_API_SECRET"]
+GDRIVE_FOLDER_ID        = os.environ["GDRIVE_FOLDER_ID"]
+GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 
 twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
 
 # ── Google Drive ──────────────────────────────────────────────────────────────
 def get_drive_service():
-    creds = service_account.Credentials.from_service_account_file(
-        "credentials.json",
+    creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
+    creds = service_account.Credentials.from_service_account_info(
+        creds_info,
         scopes=["https://www.googleapis.com/auth/drive.readonly"]
     )
     return build("drive", "v3", credentials=creds)
@@ -63,7 +66,7 @@ def get_drive_photo_bytes(file_id: str) -> bytes:
 # ── Face++ ────────────────────────────────────────────────────────────────────
 FACEPP_DETECT_URL  = "https://api-us.faceplusplus.com/facepp/v3/detect"
 FACEPP_COMPARE_URL = "https://api-us.faceplusplus.com/facepp/v3/compare"
-MATCH_THRESHOLD    = 75  # adjust if getting too many false positives/negatives
+MATCH_THRESHOLD    = 75
 
 
 def detect_face_token(image_bytes: bytes) -> str | None:
@@ -191,5 +194,5 @@ def health():
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
