@@ -371,6 +371,22 @@ def debug():
         "app_url": APP_URL,
     }, 200
 
+@app.route("/test-facepp", methods=["GET"])
+def test_facepp():
+    """Test Face++ API with a tiny 1x1 pixel image to verify credentials."""
+    import base64
+    # 1×1 white JPEG, enough to get a real API response (will say no face found)
+    tiny = base64.b64decode(
+        "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8U"
+        "HRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgN"
+        "DRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy"
+        "MjL/wAARCAABAAEDASIAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAABgUE/8QAIxAAAQME"
+        "AgMAAAAAAAAAAAAAAQIDBAURBhIhMf/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAA"
+        "AAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aq9a1ra1rWtQf/9k="
+    )
+    result = facepp("detect", {}, files={"image_file": ("test.jpg", tiny, "image/jpeg")})
+    return {"facepp_response": result, "api_key_prefix": FACEPP_API_KEY[:8] + "..."}, 200
+
 @app.route("/media/<filename>", methods=["GET"])
 def serve_media(filename):
     if not filename.endswith(".pdf"):
