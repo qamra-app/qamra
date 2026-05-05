@@ -11,7 +11,6 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-# ── Flask App ────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -22,27 +21,31 @@ FACEPP_API_KEY          = os.environ["FACEPP_API_KEY"]
 FACEPP_API_SECRET       = os.environ["FACEPP_API_SECRET"]
 GDRIVE_FOLDER_ID        = os.environ["GDRIVE_FOLDER_ID"]
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
+FACEPP_FACESET_TOKEN    = os.environ.get("FACEPP_FACESET_TOKEN", "")
+
+FACEPP_BASE    = "https://api-us.faceplusplus.com/facepp/v3"
+MATCH_CONF     = 76   # Face++ recommended threshold for same person
+FACEMAP_FILE   = "/tmp/facemap.json"   # face_token -> {drive_id, link}
 
 twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
 
 # ── Google Drive ──────────────────────────────────────────────────────────────
 def get_drive_service():
-    creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
     creds = service_account.Credentials.from_service_account_info(
-        creds_info,
+        json.loads(GOOGLE_CREDENTIALS_JSON),
         scopes=["https://www.googleapis.com/auth/drive.readonly"]
     )
     return build("drive", "v3", credentials=creds)
 
 
-def list_drive_photos(folder_id: str) -> list[dict]:
+def list_drive_photos() -> list[dict]:
     service = get_drive_service()
     results, page_token = [], None
     while True:
         resp = service.files().list(
-            q=f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false",
+            q=f"'{GDRIVE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed=false",
             fields="nextPageToken, files(id, name, webViewLink)",
-            pageSize=100,
+            pageSize=200,
             pageToken=page_token
         ).execute()
         results.extend(resp.get("files", []))
@@ -52,72 +55,146 @@ def list_drive_photos(folder_id: str) -> list[dict]:
     return results
 
 
-def get_drive_photo_bytes(file_id: str) -> bytes:
+def download_photo(file_id: str) -> bytes:
     service = get_drive_service()
-    request_dl = service.files().get_media(fileId=file_id)
+    req = service.files().get_media(fileId=file_id)
     buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request_dl)
+    dl = MediaIoBaseDownload(buf, req)
     done = False
     while not done:
-        _, done = downloader.next_chunk()
+        _, done = dl.next_chunk()
     return buf.getvalue()
 
 
-# ── Face++ ────────────────────────────────────────────────────────────────────
-FACEPP_DETECT_URL  = "https://api-us.faceplusplus.com/facepp/v3/detect"
-FACEPP_COMPARE_URL = "https://api-us.faceplusplus.com/facepp/v3/compare"
-MATCH_THRESHOLD    = 75
+# ── Face++ helpers ────────────────────────────────────────────────────────────
+def facepp(endpoint: str, data: dict, files=None):
+    data["api_key"]    = FACEPP_API_KEY
+    data["api_secret"] = FACEPP_API_SECRET
+    resp = requests.post(f"{FACEPP_BASE}/{endpoint}", data=data, files=files, timeout=20)
+    return resp.json()
 
 
-def detect_face_token(image_bytes: bytes) -> str | None:
-    resp = requests.post(
-        FACEPP_DETECT_URL,
-        data={"api_key": FACEPP_API_KEY, "api_secret": FACEPP_API_SECRET},
-        files={"image_file": ("selfie.jpg", image_bytes, "image/jpeg")},
-        timeout=15
-    )
-    resp.raise_for_status()
-    faces = resp.json().get("faces", [])
+def detect_token(image_bytes: bytes) -> str | None:
+    result = facepp("detect", {}, files={"image_file": ("img.jpg", image_bytes, "image/jpeg")})
+    faces = result.get("faces", [])
+    if not faces:
+        print(f"[DETECT] No face found. API response: {result}", flush=True)
     return faces[0]["face_token"] if faces else None
 
 
-def compare_faces(token1: str, image_bytes: bytes) -> float:
-    resp = requests.post(
-        FACEPP_COMPARE_URL,
-        data={
-            "api_key": FACEPP_API_KEY,
-            "api_secret": FACEPP_API_SECRET,
-            "face_token1": token1,
-        },
-        files={"image_file2": ("photo.jpg", image_bytes, "image/jpeg")},
-        timeout=15
-    )
-    resp.raise_for_status()
-    return resp.json().get("confidence", 0)
+def ensure_faceset() -> str:
+    global FACEPP_FACESET_TOKEN
+    if FACEPP_FACESET_TOKEN:
+        return FACEPP_FACESET_TOKEN
+    result = facepp("faceset/create", {"display_name": "qamra_wedding"})
+    token = result.get("faceset_token", "")
+    print(f"[FACESET] Created: {token} — add FACEPP_FACESET_TOKEN={token} to Railway variables", flush=True)
+    FACEPP_FACESET_TOKEN = token
+    return token
 
 
-# ── Core Logic ────────────────────────────────────────────────────────────────
-def find_photos_for_selfie(selfie_bytes: bytes) -> list[str]:
-    face_token = detect_face_token(selfie_bytes)
-    if not face_token:
-        raise ValueError("ما لقيت وجه في الصورة")
+def load_facemap() -> dict:
+    try:
+        with open(FACEMAP_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-    photos = list_drive_photos(GDRIVE_FOLDER_ID)
-    matched_links = []
+
+def save_facemap(fm: dict):
+    with open(FACEMAP_FILE, "w") as f:
+        json.dump(fm, f)
+
+
+# ── Indexing (run once via /index endpoint) ───────────────────────────────────
+def run_index():
+    faceset_token = ensure_faceset()
+    facemap       = load_facemap()
+    indexed_ids   = {v["drive_id"] for v in facemap.values()}
+    photos        = list_drive_photos()
+    new_tokens    = []
 
     for photo in photos:
+        if photo["id"] in indexed_ids:
+            continue
         try:
-            photo_bytes = get_drive_photo_bytes(photo["id"])
-            confidence  = compare_faces(face_token, photo_bytes)
-            if confidence >= MATCH_THRESHOLD:
-                matched_links.append(photo["webViewLink"])
+            img_bytes = download_photo(photo["id"])
+            result    = facepp("detect", {}, files={"image_file": ("img.jpg", img_bytes, "image/jpeg")})
+            faces     = result.get("faces", [])
+            if not faces:
+                print(f"[INDEX] No face: {photo['name']}", flush=True)
+                continue
+            for face in faces:
+                ft = face["face_token"]
+                facemap[ft] = {"drive_id": photo["id"], "link": photo["webViewLink"], "name": photo["name"]}
+                new_tokens.append(ft)
+            print(f"[INDEX] Indexed {len(faces)} face(s): {photo['name']}", flush=True)
         except Exception as e:
-            print(f"[SKIP] {photo['name']}: {e}", flush=True)
+            print(f"[INDEX] Error {photo['name']}: {e}", flush=True)
 
-    return matched_links
+    # Add to FaceSet in batches of 5
+    for i in range(0, len(new_tokens), 5):
+        batch = new_tokens[i:i+5]
+        result = facepp("faceset/addface", {
+            "faceset_token": faceset_token,
+            "face_tokens": ",".join(batch)
+        })
+        print(f"[INDEX] Added batch to FaceSet: {result.get('face_added', 0)} added", flush=True)
+
+    save_facemap(facemap)
+    print(f"[INDEX] Done. Total faces indexed: {len(facemap)}", flush=True)
+    return len(facemap)
 
 
-# ── WhatsApp Webhook ──────────────────────────────────────────────────────────
+# ── Search ────────────────────────────────────────────────────────────────────
+def find_photos_for_selfie(selfie_bytes: bytes) -> list[str]:
+    face_token = detect_token(selfie_bytes)
+    if not face_token:
+        raise ValueError("ما لقيت وجه في السيلفي — تأكد الصورة واضحة")
+
+    faceset_token = ensure_faceset()
+    facemap       = load_facemap()
+
+    if not facemap:
+        raise ValueError("الصور لم تُفهرس بعد — تواصل مع المنظم")
+
+    result  = facepp("search", {
+        "face_token":          face_token,
+        "faceset_token":       faceset_token,
+        "return_result_count": 50,
+    })
+
+    print(f"[SEARCH] Face++ search result: {json.dumps(result)[:300]}", flush=True)
+
+    results = result.get("results", [])
+    seen    = set()
+    links   = []
+    for r in results:
+        if r["confidence"] >= MATCH_CONF:
+            entry = facemap.get(r["face_token"])
+            if entry and entry["link"] not in seen:
+                seen.add(entry["link"])
+                links.append(entry["link"])
+
+    return links
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+@app.route("/", methods=["GET"])
+def health():
+    fm = load_facemap()
+    return f"قمرة 🌙 — running | {len(fm)} faces indexed", 200
+
+
+@app.route("/index", methods=["POST"])
+def index_photos():
+    def do_index():
+        count = run_index()
+        print(f"[INDEX] Complete: {count} faces", flush=True)
+    threading.Thread(target=do_index).start()
+    return {"status": "indexing started in background"}, 202
+
+
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     num_media = int(request.form.get("NumMedia", 0))
@@ -140,19 +217,15 @@ def whatsapp_webhook():
     sender = request.form.get("From", "")
 
     try:
-        media_resp = requests.get(
-            media_url,
-            auth=(TWILIO_SID, TWILIO_TOKEN),
-            timeout=15
-        )
+        media_resp = requests.get(media_url, auth=(TWILIO_SID, TWILIO_TOKEN), timeout=15)
         media_resp.raise_for_status()
     except Exception as e:
-        print(f"[MEDIA DOWNLOAD ERROR] {e}", flush=True)
+        print(f"[DOWNLOAD] {e}", flush=True)
         msg.body("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
         return str(resp)
 
     selfie_bytes = media_resp.content
-    app_ctx = app.app_context()
+    app_ctx      = app.app_context()
 
     def search_and_reply():
         app_ctx.push()
@@ -164,35 +237,22 @@ def whatsapp_webhook():
                 links = "\n\n".join([f"📷 {l}" for l in matched[:10]])
                 body  = f"✅ وجدت {len(matched)} صورة لك!\n\n{links}"
         except Exception as e:
-            print(f"[SEARCH ERROR] {str(e)}", flush=True)
-            body = f"⚠️ خطأ أثناء البحث: {str(e)}"
+            print(f"[SEARCH ERROR] {e}", flush=True)
+            body = f"⚠️ {str(e)}"
         finally:
             app_ctx.pop()
 
         try:
-            twilio_client.messages.create(
-                from_=TWILIO_WHATSAPP,
-                to=sender,
-                body=body
-            )
+            twilio_client.messages.create(from_=TWILIO_WHATSAPP, to=sender, body=body)
         except Exception as e:
-            print(f"[TWILIO SEND ERROR] {str(e)}", flush=True)
+            print(f"[TWILIO] {e}", flush=True)
 
-    thread = threading.Thread(target=search_and_reply)
-    thread.daemon = True
-    thread.start()
+    threading.Thread(target=search_and_reply, daemon=True).start()
 
-    msg.body("🔍 جاري البحث عن صورك... سأرسل لك النتيجة خلال دقيقة ⏳")
+    msg.body("🔍 جاري البحث عن صورك... سأرسل لك النتيجة خلال ثوانٍ ⏳")
     return str(resp)
 
 
-# ── Health Check ──────────────────────────────────────────────────────────────
-@app.route("/", methods=["GET"])
-def health():
-    return "قمرة 🌙 — running", 200
-
-
-# ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
