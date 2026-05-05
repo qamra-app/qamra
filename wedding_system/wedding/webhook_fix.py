@@ -216,11 +216,18 @@ def whatsapp_webhook():
 
     sender = request.form.get("From", "")
 
-    try:
-        media_resp = requests.get(media_url, auth=(TWILIO_SID, TWILIO_TOKEN), timeout=15)
-        media_resp.raise_for_status()
-    except Exception as e:
-        print(f"[DOWNLOAD] {e}", flush=True)
+    selfie_bytes = None
+    for attempt_auth in [None, (TWILIO_SID, TWILIO_TOKEN)]:
+        try:
+            r = requests.get(media_url, auth=attempt_auth, timeout=20, allow_redirects=True)
+            print(f"[DOWNLOAD] status={r.status_code} auth={'yes' if attempt_auth else 'no'} url={media_url[:80]}", flush=True)
+            if r.status_code == 200:
+                selfie_bytes = r.content
+                break
+        except Exception as e:
+            print(f"[DOWNLOAD] error auth={'yes' if attempt_auth else 'no'}: {e}", flush=True)
+
+    if not selfie_bytes:
         msg.body("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
         return str(resp)
 
