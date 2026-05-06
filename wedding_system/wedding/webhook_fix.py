@@ -327,6 +327,11 @@ def search_and_send(selfie_bytes, sender):
             from_=TWILIO_WHATSAPP, to=sender,
             body="⚠️ فيه خطأ في إرسال الصور، جرب مرة ثانية."
         )
+    else:
+        twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP, to=sender,
+            body="شكراً لاستخدامك قمرة 🌙\n\nنتمنى أن الصور عجبتك وخلّت الذكرى تدوم ✨\n\ننتظرك معنا في المرة الجاية 🎉"
+        )
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
