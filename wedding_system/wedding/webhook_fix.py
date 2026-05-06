@@ -178,47 +178,55 @@ def save_jpeg(image_bytes, output_path):
         return False
 
 # ── Indexing ──────────────────────────────────────────────────────────────────
+_index_lock = threading.Lock()
+
 def run_index():
-    ensure_collection()
-    state       = load_state()
-    indexed_ids = set(state.get("indexed_ids", []))
-    file_map    = state.get("file_map", {})  # file_id → {name, link}
-
-    try:
-        photos = list_drive_photos()
-    except Exception as e:
-        print(f"[INDEX] Drive list error: {e}", flush=True)
+    if not _index_lock.acquire(blocking=False):
+        print("[INDEX] Already running, skipping.", flush=True)
         return 0
+    try:
+        ensure_collection()
+        state       = load_state()
+        indexed_ids = set(state.get("indexed_ids", []))
+        file_map    = state.get("file_map", {})
 
-    print(f"[INDEX] {len(photos)} photos in Drive, {len(indexed_ids)} already indexed", flush=True)
-    new_count = 0
-
-    for i, photo in enumerate(photos):
-        if photo["id"] in indexed_ids:
-            continue
         try:
-            img_bytes = download_file(photo["id"])
-            n = index_face(img_bytes, photo["id"])
-            if n > 0:
-                indexed_ids.add(photo["id"])
-                file_map[photo["id"]] = {"name": photo["name"], "link": photo["webViewLink"]}
-                new_count += n
-            else:
-                print(f"[INDEX] No face found: {photo['name']}", flush=True)
+            photos = list_drive_photos()
         except Exception as e:
-            print(f"[INDEX] Error {photo['name']}: {e}", flush=True)
+            print(f"[INDEX] Drive list error: {e}", flush=True)
+            return 0
 
-        if (i + 1) % 20 == 0:
-            state["indexed_ids"] = list(indexed_ids)
-            state["file_map"]    = file_map
-            save_state(state)
-            print(f"[INDEX] Progress: {i+1}/{len(photos)}, {new_count} new faces", flush=True)
+        print(f"[INDEX] {len(photos)} photos in Drive, {len(indexed_ids)} already indexed", flush=True)
+        new_count = 0
 
-    state["indexed_ids"] = list(indexed_ids)
-    state["file_map"]    = file_map
-    save_state(state)
-    print(f"[INDEX] Complete: {len(indexed_ids)} photos indexed, {new_count} new faces", flush=True)
-    return len(indexed_ids)
+        for i, photo in enumerate(photos):
+            if photo["id"] in indexed_ids:
+                continue
+            try:
+                img_bytes = download_file(photo["id"])
+                n = index_face(img_bytes, photo["id"])
+                if n > 0:
+                    indexed_ids.add(photo["id"])
+                    file_map[photo["id"]] = {"name": photo["name"], "link": photo["webViewLink"]}
+                    new_count += n
+                else:
+                    print(f"[INDEX] No face found: {photo['name']}", flush=True)
+            except Exception as e:
+                print(f"[INDEX] Error {photo['name']}: {e}", flush=True)
+
+            if (i + 1) % 20 == 0:
+                state["indexed_ids"] = list(indexed_ids)
+                state["file_map"]    = file_map
+                save_state(state)
+                print(f"[INDEX] Progress: {i+1}/{len(photos)}, {new_count} new faces", flush=True)
+
+        state["indexed_ids"] = list(indexed_ids)
+        state["file_map"]    = file_map
+        save_state(state)
+        print(f"[INDEX] Complete: {len(indexed_ids)} photos indexed, {new_count} new faces", flush=True)
+        return len(indexed_ids)
+    finally:
+        _index_lock.release()
 
 # ── Auto-index ────────────────────────────────────────────────────────────────
 AUTO_INDEX_INTERVAL = 900  # seconds (15 min)
