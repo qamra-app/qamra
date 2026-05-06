@@ -287,10 +287,14 @@ def search_and_send(selfie_bytes, sender):
         return
 
     # Send summary message first
-    twilio_client.messages.create(
-        from_=TWILIO_WHATSAPP, to=sender,
-        body=f"✅ وجدت {len(matched_entries)} صورة لك من العرس 🎉 — جاري الإرسال..."
-    )
+    try:
+        twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP, to=sender,
+            body=f"✅ وجدت {len(matched_entries)} صورة لك من العرس 🎉 — جاري الإرسال..."
+        )
+        print(f"[REPLY] Sent summary to {sender}", flush=True)
+    except Exception as e:
+        print(f"[REPLY] ERROR sending summary to {sender}: {e}", flush=True)
 
     # Download and send each photo as individual JPEG (max 10)
     sent = 0
@@ -300,29 +304,39 @@ def search_and_send(selfie_bytes, sender):
             raw       = download_file(file_id)
             img_name  = f"qamra_{uid}_{i+1}.jpg"
             img_path  = os.path.join(MEDIA_DIR, img_name)
+            print(f"[REPLY] Saving photo {i+1} → {img_path}", flush=True)
             if save_jpeg(raw, img_path):
                 img_url = f"{APP_URL}/media/{img_name}"
                 conf    = entry.get("conf", 0)
+                print(f"[REPLY] Sending photo {i+1} url={img_url}", flush=True)
                 twilio_client.messages.create(
                     from_=TWILIO_WHATSAPP, to=sender,
                     body=f"📷 صورة {i+1} — تطابق {conf:.0f}%",
                     media_url=[img_url]
                 )
                 sent += 1
-                print(f"[REPLY] Sent photo {i+1}/{len(matched_entries)}: {img_url}", flush=True)
+                print(f"[REPLY] OK photo {i+1}/{len(matched_entries)}", flush=True)
+            else:
+                print(f"[REPLY] save_jpeg returned False for photo {i+1}", flush=True)
         except Exception as e:
-            print(f"[REPLY] Error sending photo {i+1}: {e}", flush=True)
+            print(f"[REPLY] ERROR photo {i+1}: {e}", flush=True)
 
     if sent == 0:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body="⚠️ فيه خطأ في إرسال الصور، جرب مرة ثانية."
-        )
+        try:
+            twilio_client.messages.create(
+                from_=TWILIO_WHATSAPP, to=sender,
+                body="⚠️ فيه خطأ في إرسال الصور، جرب مرة ثانية."
+            )
+        except Exception as e:
+            print(f"[REPLY] ERROR sending fallback: {e}", flush=True)
     else:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body="شكراً لاستخدامك قمرة 🌙\n\nنتمنى أن الصور عجبتك وخلّت الذكرى تدوم ✨\n\ننتظرك معنا في المرة الجاية 🎉"
-        )
+        try:
+            twilio_client.messages.create(
+                from_=TWILIO_WHATSAPP, to=sender,
+                body="شكراً لاستخدامك قمرة 🌙\n\nنتمنى أن الصور عجبتك وخلّت الذكرى تدوم ✨\n\ننتظرك معنا في المرة الجاية 🎉"
+            )
+        except Exception as e:
+            print(f"[REPLY] ERROR sending closing: {e}", flush=True)
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
