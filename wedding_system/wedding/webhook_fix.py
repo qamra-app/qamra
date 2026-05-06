@@ -13,7 +13,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image
 
 app = Flask(__name__)
@@ -33,7 +33,6 @@ COLLECTION_ID    = "qamra-wedding"
 MATCH_CONF       = 80
 LOCAL_STATE_FILE = "/tmp/qamra_state.json"
 MEDIA_DIR        = "/tmp/qamra_media"
-DRIVE_STATE_NAME = "qamra_state.json"
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
@@ -88,47 +87,11 @@ def load_state():
                 return s
     except Exception:
         pass
-
-    try:
-        svc = _drive()
-        hits = svc.files().list(
-            q=f"name='{DRIVE_STATE_NAME}' and '{GDRIVE_FOLDER_ID}' in parents and trashed=false",
-            fields="files(id)"
-        ).execute().get("files", [])
-        if hits:
-            raw   = download_file(hits[0]["id"])
-            state = json.loads(raw.decode())
-            with open(LOCAL_STATE_FILE, "w") as f:
-                json.dump(state, f)
-            print(f"[STATE] Loaded from Drive: {len(state.get('indexed_ids',[]))} indexed", flush=True)
-            return state
-    except Exception as e:
-        print(f"[STATE] Drive load error: {e}", flush=True)
-
     return {"indexed_ids": [], "file_map": {}}
 
 def save_state(state):
     with open(LOCAL_STATE_FILE, "w") as f:
         json.dump(state, f)
-
-    try:
-        svc     = _drive(write=True)
-        content = json.dumps(state).encode()
-        media   = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/json")
-        hits    = svc.files().list(
-            q=f"name='{DRIVE_STATE_NAME}' and '{GDRIVE_FOLDER_ID}' in parents and trashed=false",
-            fields="files(id)"
-        ).execute().get("files", [])
-        if hits:
-            svc.files().update(fileId=hits[0]["id"], media_body=media).execute()
-        else:
-            svc.files().create(
-                body={"name": DRIVE_STATE_NAME, "parents": [GDRIVE_FOLDER_ID]},
-                media_body=media
-            ).execute()
-        print("[STATE] Saved to Drive", flush=True)
-    except Exception as e:
-        print(f"[STATE] Drive save error: {e}", flush=True)
 
 # ── Rekognition helpers ───────────────────────────────────────────────────────
 def resize_for_rekognition(image_bytes):
@@ -255,6 +218,25 @@ def run_index():
     save_state(state)
     print(f"[INDEX] Complete: {len(indexed_ids)} photos indexed, {new_count} new faces", flush=True)
     return len(indexed_ids)
+
+# ── Auto-index ────────────────────────────────────────────────────────────────
+AUTO_INDEX_INTERVAL = 900  # seconds (15 min)
+
+def _auto_index_loop():
+    print("[AUTO-INDEX] Startup run starting...", flush=True)
+    try:
+        run_index()
+    except Exception as e:
+        print(f"[AUTO-INDEX] Startup error: {e}", flush=True)
+    while True:
+        time.sleep(AUTO_INDEX_INTERVAL)
+        print("[AUTO-INDEX] Scheduled run starting...", flush=True)
+        try:
+            run_index()
+        except Exception as e:
+            print(f"[AUTO-INDEX] Error: {e}", flush=True)
+
+threading.Thread(target=_auto_index_loop, daemon=True).start()
 
 # ── Search + reply ────────────────────────────────────────────────────────────
 def search_and_send(selfie_bytes, sender):
