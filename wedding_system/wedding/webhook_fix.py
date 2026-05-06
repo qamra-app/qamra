@@ -14,7 +14,7 @@ from twilio.rest import Client
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from PIL import Image
+from PIL import Image, ImageOps
 
 app = Flask(__name__)
 
@@ -164,9 +164,10 @@ def search_by_selfie(selfie_bytes):
         return []
 
 def save_jpeg(image_bytes, output_path):
-    """Save image as JPEG, resizing if over 5MB."""
     try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img = Image.open(io.BytesIO(image_bytes))
+        img = ImageOps.exif_transpose(img)  # fix landscape rotation
+        img = img.convert("RGB")
         if img.width > 1920:
             ratio = 1920 / img.width
             img = img.resize((1920, int(img.height * ratio)), Image.LANCZOS)
