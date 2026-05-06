@@ -30,7 +30,7 @@ GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 APP_URL                 = os.environ.get("APP_URL", "https://qamra-production.up.railway.app")
 
 COLLECTION_ID    = "qamra-wedding"
-MATCH_CONF       = 70
+MATCH_CONF       = 80
 LOCAL_STATE_FILE = "/tmp/qamra_state.json"
 MEDIA_DIR        = "/tmp/qamra_media"
 DRIVE_STATE_NAME = "qamra_state.json"
@@ -200,25 +200,18 @@ def search_by_selfie(selfie_bytes):
         print(f"[SEARCH] Error: {e}", flush=True)
         return []
 
-# ── PDF builder ───────────────────────────────────────────────────────────────
-def build_pdf(photo_bytes_list, output_path):
-    pages = []
-    for raw in photo_bytes_list:
-        try:
-            img = Image.open(io.BytesIO(raw)).convert("RGB")
-            if img.width > 1800:
-                ratio = 1800 / img.width
-                img = img.resize((1800, int(img.height * ratio)), Image.LANCZOS)
-            pages.append(img)
-        except Exception as e:
-            print(f"[PDF] Skip: {e}", flush=True)
-    if not pages:
+def save_jpeg(image_bytes, output_path):
+    """Save image as JPEG, resizing if over 5MB."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        if img.width > 1920:
+            ratio = 1920 / img.width
+            img = img.resize((1920, int(img.height * ratio)), Image.LANCZOS)
+        img.save(output_path, format="JPEG", quality=85)
+        return True
+    except Exception as e:
+        print(f"[JPEG] Error: {e}", flush=True)
         return False
-    pages[0].save(output_path, format="PDF", save_all=True,
-                  append_images=pages[1:], resolution=150)
-    mb = os.path.getsize(output_path) / 1024 / 1024
-    print(f"[PDF] {len(pages)} pages, {mb:.1f}MB → {output_path}", flush=True)
-    return True
 
 # ── Indexing ──────────────────────────────────────────────────────────────────
 def run_index():
@@ -302,38 +295,37 @@ def search_and_send(selfie_bytes, sender):
         )
         return
 
-    # Download matched photos (max 20)
-    photo_bytes_list = []
-    for file_id, entry in matched_entries[:20]:
+    # Send summary message first
+    twilio_client.messages.create(
+        from_=TWILIO_WHATSAPP, to=sender,
+        body=f"✅ وجدت {len(matched_entries)} صورة لك من العرس 🎉 — جاري الإرسال..."
+    )
+
+    # Download and send each photo as individual JPEG (max 10)
+    sent = 0
+    uid  = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:8]
+    for i, (file_id, entry) in enumerate(matched_entries[:10]):
         try:
-            photo_bytes_list.append(download_file(file_id))
+            raw       = download_file(file_id)
+            img_name  = f"qamra_{uid}_{i+1}.jpg"
+            img_path  = os.path.join(MEDIA_DIR, img_name)
+            if save_jpeg(raw, img_path):
+                img_url = f"{APP_URL}/media/{img_name}"
+                conf    = entry.get("conf", 0)
+                twilio_client.messages.create(
+                    from_=TWILIO_WHATSAPP, to=sender,
+                    body=f"📷 صورة {i+1} — تطابق {conf:.0f}%",
+                    media_url=[img_url]
+                )
+                sent += 1
+                print(f"[REPLY] Sent photo {i+1}/{len(matched_entries)}: {img_url}", flush=True)
         except Exception as e:
-            print(f"[PDF] Download error {entry['name']}: {e}", flush=True)
+            print(f"[REPLY] Error sending photo {i+1}: {e}", flush=True)
 
-    if not photo_bytes_list:
+    if sent == 0:
         twilio_client.messages.create(
             from_=TWILIO_WHATSAPP, to=sender,
-            body=f"✅ وجدت {len(matched_entries)} صورة لكن فيه خطأ في التحميل، جرب مرة ثانية."
-        )
-        return
-
-    uid      = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:10]
-    pdf_name = f"qamra_{uid}.pdf"
-    pdf_path = os.path.join(MEDIA_DIR, pdf_name)
-
-    if build_pdf(photo_bytes_list, pdf_path):
-        pdf_url = f"{APP_URL}/media/{pdf_name}"
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body=f"✅ وجدت {len(matched_entries)} صورة لك من العرس 🎉",
-            media_url=[pdf_url]
-        )
-        print(f"[REPLY] PDF sent: {pdf_url}", flush=True)
-    else:
-        links = "\n".join([f"📷 {e['link']}" for _, e in matched_entries[:10]])
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body=f"✅ وجدت {len(matched_entries)} صورة لك!\n\n{links}"
+            body="⚠️ فيه خطأ في إرسال الصور، جرب مرة ثانية."
         )
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -378,11 +370,13 @@ def test_rekognition():
 
 @app.route("/media/<filename>", methods=["GET"])
 def serve_media(filename):
-    if not filename.endswith(".pdf"):
-        return "Not found", 404
     filepath = os.path.join(MEDIA_DIR, filename)
-    if os.path.exists(filepath):
-        return send_file(filepath, mimetype="application/pdf")
+    if not os.path.exists(filepath):
+        return "Not found", 404
+    if filename.endswith(".jpg") or filename.endswith(".jpeg"):
+        return send_file(filepath, mimetype="image/jpeg")
+    if filename.endswith(".png"):
+        return send_file(filepath, mimetype="image/png")
     return "Not found", 404
 
 @app.route("/index", methods=["POST"])
