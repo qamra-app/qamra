@@ -380,6 +380,72 @@ def index_photos():
     threading.Thread(target=run_index, daemon=True).start()
     return {"status": "indexing started"}, 202
 
+@app.route("/match", methods=["POST"])
+def match_api():
+    """
+    POST a selfie, get back matching wedding photos as JSON.
+    Accepts: multipart/form-data with field 'photo' (file upload)
+          OR application/json with field 'image_url' (public URL)
+    Returns: { "matches": [ { "url": "...", "confidence": 95.2, "name": "..." } ] }
+    """
+    selfie_bytes = None
+
+    # Accept file upload
+    if "photo" in request.files:
+        selfie_bytes = request.files["photo"].read()
+
+    # Accept URL
+    elif request.is_json and request.json.get("image_url"):
+        try:
+            r = requests.get(request.json["image_url"], timeout=15)
+            if r.status_code == 200:
+                selfie_bytes = r.content
+        except Exception as e:
+            return {"error": f"Could not fetch image: {e}"}, 400
+
+    if not selfie_bytes:
+        return {"error": "Send a photo via 'photo' file field or 'image_url' JSON field"}, 400
+
+    state    = load_state()
+    file_map = state.get("file_map", {})
+
+    if not state.get("indexed_ids"):
+        return {"error": "Photos not indexed yet, try again in a few minutes"}, 503
+
+    matches = search_by_selfie(selfie_bytes)
+    if not matches:
+        return {"matches": [], "message": "No face found or no matches"}, 200
+
+    # Deduplicate and build response
+    seen, results = set(), []
+    uid = hashlib.md5(f"{time.time()}".encode()).hexdigest()[:8]
+
+    for m in matches:
+        file_id = m["Face"]["ExternalImageId"]
+        conf    = m["Similarity"]
+        if file_id in seen:
+            continue
+        seen.add(file_id)
+        entry    = file_map.get(file_id, {})
+        img_name = f"qamra_{uid}_{len(results)+1}.jpg"
+        img_path = os.path.join(MEDIA_DIR, img_name)
+        try:
+            raw = download_file(file_id)
+            if save_jpeg(raw, img_path):
+                results.append({
+                    "url":        f"{APP_URL}/media/{img_name}",
+                    "confidence": round(conf, 1),
+                    "name":       entry.get("name", ""),
+                    "drive_link": entry.get("link", ""),
+                })
+        except Exception as e:
+            print(f"[MATCH-API] Error downloading {file_id}: {e}", flush=True)
+
+        if len(results) >= 20:
+            break
+
+    return {"matches": results}, 200
+
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     num_media = int(request.form.get("NumMedia", 0))
