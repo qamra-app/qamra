@@ -33,6 +33,23 @@ COLLECTION_ID    = "qamra-wedding"
 MATCH_CONF       = 80
 LOCAL_STATE_FILE = "/tmp/qamra_state.json"
 MEDIA_DIR        = "/tmp/qamra_media"
+OWNER_WHATSAPP   = "whatsapp:+97470263297"
+
+# In-memory conversation state per user: phone -> {"state": str, "ts": float}
+_conv = {}
+_CONV_TTL = 3600  # 1 hour
+
+def _get_state(phone):
+    e = _conv.get(phone)
+    if e and (time.time() - e["ts"]) < _CONV_TTL:
+        return e["state"]
+    return "new"
+
+def _set_state(phone, state):
+    _conv[phone] = {"state": state, "ts": time.time()}
+
+def _clear_state(phone):
+    _conv.pop(phone, None)
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
@@ -463,59 +480,118 @@ def match_api():
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     num_media = int(request.form.get("NumMedia", 0))
-    resp = MessagingResponse()
-    msg  = resp.message()
+    sender    = request.form.get("From", "")
+    body_text = request.form.get("Body", "").strip()
+    state     = _get_state(sender)
+    resp      = MessagingResponse()
+    msg       = resp.message()
 
-    if num_media == 0:
+    # ── Image received → always run face search ───────────────────────────────
+    if num_media > 0:
+        media_url = request.form.get("MediaUrl0")
+        if not media_url:
+            msg.body("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
+            return str(resp)
+
+        print(f"[WEBHOOK] From={sender} MediaUrl={media_url[:80]}", flush=True)
+
+        selfie_bytes = None
+        for auth in [None, (TWILIO_SID, TWILIO_TOKEN)]:
+            try:
+                r = requests.get(media_url, auth=auth, timeout=20, allow_redirects=True)
+                print(f"[DOWNLOAD] status={r.status_code} auth={'yes' if auth else 'no'} size={len(r.content)}", flush=True)
+                if r.status_code == 200:
+                    selfie_bytes = r.content
+                    break
+            except Exception as e:
+                print(f"[DOWNLOAD] error: {e}", flush=True)
+
+        if not selfie_bytes:
+            msg.body("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
+            return str(resp)
+
+        _clear_state(sender)
+        app_ctx = app.app_context()
+
+        def run():
+            app_ctx.push()
+            try:
+                search_and_send(selfie_bytes, sender)
+            except Exception as e:
+                print(f"[ERROR] {e}", flush=True)
+                try:
+                    twilio_client.messages.create(
+                        from_=TWILIO_WHATSAPP, to=sender, body=f"⚠️ {str(e)}"
+                    )
+                except Exception:
+                    pass
+            finally:
+                app_ctx.pop()
+
+        threading.Thread(target=run, daemon=True).start()
+        msg.body("🔍 جاري البحث عن صورك... سأرسل لك النتيجة خلال ثوانٍ ⏳")
+        return str(resp)
+
+    # ── Text received ─────────────────────────────────────────────────────────
+
+    # Step 1: new user → ask routing question
+    if state == "new":
+        _set_state(sender, "routing")
         msg.body(
-            "🌙 أهلاً وسهلاً بك في قمرة\n\n"
-            "نحن سعداء بوجودك معنا الليلة ✨\n\n"
-            "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من العرس خلال ثوانٍ 🎉"
+            "🌙 أهلاً وسهلاً!\n\n"
+            "كيف أقدر أساعدك؟\n\n"
+            "رد بـ *1* — إذا كنت ضيفاً تبحث عن صورك من الحفل 📸\n"
+            "رد بـ *2* — إذا لديك استفسار عام 💬"
         )
         return str(resp)
 
-    media_url = request.form.get("MediaUrl0")
-    if not media_url:
-        msg.body("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
+    # Step 2: waiting for 1 or 2
+    if state == "routing":
+        if body_text in ("1", "١") or any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل")):
+            _set_state(sender, "awaiting_selfie")
+            msg.body(
+                "✨ ممتاز!\n\n"
+                "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من العرس خلال ثوانٍ 🎉"
+            )
+        elif body_text in ("2", "٢") or any(w in body_text for w in ("استفسار", "سؤال", "تواصل")):
+            _set_state(sender, "awaiting_inquiry")
+            msg.body("بكل سرور! اكتب استفسارك وسأوصله لفريقنا 💬")
+        else:
+            msg.body(
+                "من فضلك رد بـ *1* أو *2*:\n\n"
+                "*1* — ضيف يبحث عن صوره من الحفل 📸\n"
+                "*2* — استفسار عام 💬"
+            )
         return str(resp)
 
-    sender = request.form.get("From", "")
-    print(f"[WEBHOOK] From={sender} MediaUrl={media_url[:80]}", flush=True)
-
-    selfie_bytes = None
-    for auth in [None, (TWILIO_SID, TWILIO_TOKEN)]:
-        try:
-            r = requests.get(media_url, auth=auth, timeout=20, allow_redirects=True)
-            print(f"[DOWNLOAD] status={r.status_code} auth={'yes' if auth else 'no'} size={len(r.content)}", flush=True)
-            if r.status_code == 200:
-                selfie_bytes = r.content
-                break
-        except Exception as e:
-            print(f"[DOWNLOAD] error: {e}", flush=True)
-
-    if not selfie_bytes:
-        msg.body("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
+    # Step 3a: guest told to send selfie but sent text instead
+    if state == "awaiting_selfie":
+        msg.body("📸 أرسل لي *سيلفي* لوجهك وسأجد صورك!\n\nللبداية من جديد اكتب *مرحبا*")
         return str(resp)
 
-    app_ctx = app.app_context()
-
-    def run():
-        app_ctx.push()
+    # Step 3b: inquiry text received → forward to owner
+    if state == "awaiting_inquiry":
+        _clear_state(sender)
+        msg.body("شكراً! تم إيصال استفسارك وسيتواصل معك فريقنا قريباً 🌙")
         try:
-            search_and_send(selfie_bytes, sender)
+            twilio_client.messages.create(
+                from_=TWILIO_WHATSAPP,
+                to=OWNER_WHATSAPP,
+                body=f"📩 استفسار جديد\nمن: {sender.replace('whatsapp:', '')}\n\n{body_text}"
+            )
+            print(f"[INQUIRY] Forwarded from {sender}", flush=True)
         except Exception as e:
-            print(f"[ERROR] {e}", flush=True)
-            try:
-                twilio_client.messages.create(
-                    from_=TWILIO_WHATSAPP, to=sender, body=f"⚠️ {str(e)}"
-                )
-            except Exception:
-                pass
-        finally:
-            app_ctx.pop()
+            print(f"[INQUIRY] Forward error: {e}", flush=True)
+        return str(resp)
 
-    threading.Thread(target=run, daemon=True).start()
-    msg.body("🔍 جاري البحث عن صورك... سأرسل لك النتيجة خلال ثوانٍ ⏳")
+    # Fallback / reset on "مرحبا" or anything unexpected
+    _set_state(sender, "routing")
+    msg.body(
+        "🌙 أهلاً وسهلاً!\n\n"
+        "كيف أقدر أساعدك؟\n\n"
+        "رد بـ *1* — إذا كنت ضيفاً تبحث عن صورك من الحفل 📸\n"
+        "رد بـ *2* — إذا لديك استفسار عام 💬"
+    )
     return str(resp)
 
 if __name__ == "__main__":
