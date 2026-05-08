@@ -229,7 +229,7 @@ def run_index():
         _index_lock.release()
 
 # ── Auto-index ────────────────────────────────────────────────────────────────
-AUTO_INDEX_INTERVAL = 900  # seconds (15 min)
+AUTO_INDEX_INTERVAL = 60  # seconds (1 min)
 
 def _auto_index_loop():
     print("[AUTO-INDEX] Startup run starting...", flush=True)
