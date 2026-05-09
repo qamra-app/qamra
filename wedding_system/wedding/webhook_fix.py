@@ -413,64 +413,35 @@ def search_and_send(selfie_bytes, sender, event_code):
         )
         return
 
-    seen_ids, matched_entries = set(), []
+    seen_ids, file_ids = set(), []
     for m in matches:
         file_id = m["Face"]["ExternalImageId"]
-        conf    = m["Similarity"]
         if file_id not in seen_ids:
             seen_ids.add(file_id)
-            entry = file_map.get(file_id, {"name": file_id, "link": ""})
-            entry["conf"] = conf
-            matched_entries.append((file_id, entry))
+            file_ids.append(file_id)
 
+    count = len(file_ids)
     twilio_client.messages.create(
         from_=TWILIO_WHATSAPP, to=sender,
-        body=f"✅ وجدت {len(matched_entries)} صورة لك من {event['name']} 🎉 — جاري الإرسال..."
+        body=f"✅ وجدت {count} صورة لك من {event['name']} 🎉 — جاري إنشاء مجلدك الخاص..."
     )
 
-    uid  = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:8]
-    sent = 0
-    for i, (file_id, entry) in enumerate(matched_entries):
-        try:
-            raw      = download_file(file_id)
-            img_name = f"qamra_{uid}_{i+1}.jpg"
-            img_path = os.path.join(MEDIA_DIR, img_name)
-            if save_jpeg(raw, img_path):
-                img_url = f"{APP_URL}/media/{img_name}"
-                conf    = entry.get("conf", 0)
-                twilio_client.messages.create(
-                    from_=TWILIO_WHATSAPP, to=sender,
-                    body=f"📷 صورة {i+1} — تطابق {conf:.0f}%",
-                    media_url=[img_url]
-                )
-                sent += 1
-                time.sleep(2)
-        except Exception as e:
-            print(f"[REPLY] ERROR photo {i+1}: {e}", flush=True)
-
-    # Personal folder with all photos
     try:
         phone_label = sender.replace("whatsapp:", "").replace("+", "")
-        folder_link = create_guest_folder(phone_label, [fid for fid, _ in matched_entries], event["name"])
-        time.sleep(2)
+        folder_link = create_guest_folder(phone_label, file_ids, event["name"])
         twilio_client.messages.create(
             from_=TWILIO_WHATSAPP, to=sender,
-            body=f"📂 جميع صورك ({len(matched_entries)} صورة) في مجلد خاص بك:\n\n{folder_link}"
+            body=(
+                f"📂 مجلدك الخاص جاهز! فيه {count} صورة:\n\n"
+                f"{folder_link}\n\n"
+                "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
+            )
         )
     except Exception as e:
         print(f"[REPLY] ERROR folder: {e}", flush=True)
-
-    time.sleep(3)
-
-    if sent > 0:
         twilio_client.messages.create(
             from_=TWILIO_WHATSAPP, to=sender,
-            body="شكراً لاستخدامك قمرة 🌙\nنتمنى أن الصور عجبتك وخلّت الذكرى تدوم ✨\ننتظرك معنا في المرة الجاية 🎉"
-        )
-    else:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body="⚠️ فيه خطأ في إرسال الصور، جرب مرة ثانية."
+            body="⚠️ فيه خطأ في إنشاء المجلد، جرب مرة ثانية."
         )
 
 # ── Routes ────────────────────────────────────────────────────────────────────
