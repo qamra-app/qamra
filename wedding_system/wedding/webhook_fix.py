@@ -141,6 +141,19 @@ def get_todays_events():
 
 load_events()
 
+# Auto-register default event from env vars if no events exist yet
+_DEFAULT_GDRIVE = os.environ.get("GDRIVE_FOLDER_ID", "")
+if not _events and _DEFAULT_GDRIVE:
+    _events["DEFAULT"] = {
+        "name":             os.environ.get("EVENT_NAME", "الحفل"),
+        "collection_id":    os.environ.get("COLLECTION_ID", "qamra-wedding"),
+        "gdrive_folder_id": _DEFAULT_GDRIVE,
+        "drive_url":        f"https://drive.google.com/drive/folders/{_DEFAULT_GDRIVE}",
+        "kiosk_url":        "",
+        "date":             "",
+    }
+    print("[EVENTS] Auto-registered DEFAULT event from env vars", flush=True)
+
 # ── Per-event state ───────────────────────────────────────────────────────────
 def _state_file(event_code):
     return f"/tmp/qamra_state_{event_code}.json"
