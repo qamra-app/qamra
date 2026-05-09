@@ -572,6 +572,123 @@ def _check_admin():
     token = request.headers.get("X-Admin-Token") or request.args.get("token")
     return token == ADMIN_TOKEN
 
+@app.route("/admin", methods=["GET"])
+def admin_ui():
+    token = request.args.get("token", "")
+    if token != ADMIN_TOKEN:
+        return """<!DOCTYPE html><html lang="ar" dir="rtl">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>قمرة — لوحة التحكم</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0E0B08;color:#FAF6EC;font-family:-apple-system,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.box{background:rgba(250,246,236,.06);border:1px solid rgba(250,246,236,.1);border-radius:20px;padding:40px;max-width:360px;width:100%;text-align:center}
+h2{margin-bottom:24px;font-size:20px}input{width:100%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:12px 16px;color:#FAF6EC;font-size:15px;margin-bottom:16px;outline:none}
+button{width:100%;background:#C9A96E;border:none;border-radius:10px;padding:14px;color:#0E0B08;font-size:15px;font-weight:700;cursor:pointer}
+</style></head><body><div class="box"><h2>🌙 قمرة — تسجيل الدخول</h2>
+<form method="get"><input type="password" name="token" placeholder="كلمة المرور"><button type="submit">دخول</button></form></div></body></html>""", 401
+
+    events_rows = ""
+    for code, ev in _events.items():
+        state   = load_state(code)
+        count   = len(state.get("indexed_ids", []))
+        landing = f"{APP_URL}/event/{code}"
+        events_rows += f"""
+        <tr>
+          <td><strong>{code}</strong></td>
+          <td>{ev['name']}</td>
+          <td>{count} صورة</td>
+          <td><a href="{landing}" target="_blank" style="color:#C9A96E">صفحة الحفل ↗</a></td>
+          <td>
+            <a href="/index?event={code}" onclick="fetch('/index?event={code}',{{method:'POST'}});this.textContent='⏳';return false"
+               style="color:#aaa;font-size:13px">إعادة فهرسة</a>
+            &nbsp;
+            <a href="/admin/event/{code}?token={token}" onclick="if(!confirm('حذف {code}؟'))return false;fetch('/admin/event/{code}',{{method:'DELETE',headers:{{'X-Admin-Token':'{token}'}}}}).then(()=>location.reload())"
+               style="color:#e55;font-size:13px">حذف</a>
+          </td>
+        </tr>"""
+
+    if not events_rows:
+        events_rows = "<tr><td colspan='5' style='text-align:center;color:#666;padding:24px'>لا يوجد أحداث — أضف أول حفل أدناه</td></tr>"
+
+    return f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>قمرة — لوحة التحكم</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0E0B08;color:#FAF6EC;font-family:-apple-system,'Segoe UI',sans-serif;padding:24px;min-height:100vh}}
+h1{{font-size:24px;margin-bottom:4px}}
+.sub{{color:#888;font-size:13px;margin-bottom:32px}}
+.card{{background:rgba(250,246,236,.05);border:1px solid rgba(250,246,236,.1);border-radius:16px;padding:24px;margin-bottom:24px}}
+h2{{font-size:16px;margin-bottom:16px;color:#C9A96E}}
+table{{width:100%;border-collapse:collapse;font-size:14px}}
+th{{text-align:right;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.1);color:#888;font-weight:500}}
+td{{padding:12px;border-bottom:1px solid rgba(255,255,255,.06)}}
+.form-row{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}}
+.form-row.full{{grid-template-columns:1fr}}
+label{{display:block;font-size:12px;color:#888;margin-bottom:4px}}
+input{{width:100%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 14px;color:#FAF6EC;font-size:14px;outline:none}}
+input:focus{{border-color:#C9A96E}}
+.btn{{background:#C9A96E;border:none;border-radius:10px;padding:12px 24px;color:#0E0B08;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px}}
+.success{{color:#4caf50;font-size:13px;margin-top:8px;display:none}}
+</style>
+</head>
+<body>
+<h1>🌙 قمرة</h1>
+<p class="sub">لوحة إدارة الأحداث</p>
+
+<div class="card">
+  <h2>الأحداث المسجلة</h2>
+  <table>
+    <thead><tr><th>الكود</th><th>الاسم</th><th>الصور</th><th>الصفحة</th><th>إجراءات</th></tr></thead>
+    <tbody>{events_rows}</tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>إضافة حفل جديد</h2>
+  <form id="addForm">
+    <div class="form-row">
+      <div><label>كود الحفل (بالإنجليزي)</label><input name="code" placeholder="مثال: AHMED2026" required></div>
+      <div><label>اسم الحفل</label><input name="name" placeholder="حفل أحمد ومريم" required></div>
+    </div>
+    <div class="form-row">
+      <div><label>Rekognition Collection ID</label><input name="collection_id" placeholder="qamra-ahmed2026" required></div>
+      <div><label>Google Drive Folder ID</label><input name="gdrive_folder_id" placeholder="1ABC..." required></div>
+    </div>
+    <div class="form-row full">
+      <div><label>رابط ألبوم Drive العام (اختياري)</label><input name="drive_url" placeholder="https://drive.google.com/drive/folders/..."></div>
+    </div>
+    <div class="form-row full">
+      <div><label>رابط الكشك (اختياري — عنوان IP المحلي)</label><input name="kiosk_url" placeholder="http://192.168.1.10:5000?event=AHMED2026"></div>
+    </div>
+    <button type="submit" class="btn">إضافة الحفل وبدء الفهرسة ＋</button>
+    <div class="success" id="successMsg">✅ تمت الإضافة! جاري الفهرسة في الخلفية.</div>
+  </form>
+</div>
+
+<script>
+document.getElementById('addForm').addEventListener('submit', async e => {{
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  body.code = body.code.toUpperCase().trim();
+  const r = await fetch('/admin/event', {{
+    method: 'POST',
+    headers: {{'Content-Type':'application/json','X-Admin-Token':'{token}'}},
+    body: JSON.stringify(body)
+  }});
+  if (r.ok) {{
+    document.getElementById('successMsg').style.display = 'block';
+    setTimeout(() => location.reload(), 2000);
+  }} else {{
+    const err = await r.json();
+    alert('خطأ: ' + (err.error || 'unknown'));
+  }}
+}});
+</script>
+</body></html>""", 200, {{"Content-Type": "text/html; charset=utf-8"}}
+
 @app.route("/admin/events", methods=["GET"])
 def admin_list_events():
     if not _check_admin():
