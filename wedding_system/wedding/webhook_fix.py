@@ -349,7 +349,7 @@ def search_and_send(selfie_bytes, sender):
     # Download and send first 10 photos as images, rest as Drive links
     sent = 0
     uid  = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:8]
-    for i, (file_id, entry) in enumerate(matched_entries[:30]):
+    for i, (file_id, entry) in enumerate(matched_entries):
         try:
             raw       = download_file(file_id)
             img_name  = f"qamra_{uid}_{i+1}.jpg"
