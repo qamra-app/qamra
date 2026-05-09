@@ -158,8 +158,32 @@ if not _events and _DEFAULT_GDRIVE:
 def _state_file(event_code):
     return f"/tmp/qamra_state_{event_code}.json"
 
+def _state_drive_name(event_code):
+    return f"_qamra_state_{event_code}_.json"
+
+def _save_state_to_drive(event_code, data):
+    try:
+        svc     = _drive(write=True)
+        name    = _state_drive_name(event_code)
+        content = json.dumps(data, ensure_ascii=False).encode()
+        from googleapiclient.http import MediaInMemoryUpload
+        media = MediaInMemoryUpload(content, mimetype="application/json")
+        resp  = svc.files().list(
+            q=f"name='{name}' and trashed=false",
+            fields="files(id)", pageSize=1,
+        ).execute()
+        files = resp.get("files", [])
+        if files:
+            svc.files().update(fileId=files[0]["id"], media_body=media).execute()
+        else:
+            svc.files().create(body={"name": name}, media_body=media, fields="id").execute()
+        print(f"[STATE] Saved {event_code} state to Drive ({len(data.get('indexed_ids',[]))} ids)", flush=True)
+    except Exception as e:
+        print(f"[STATE] Drive save error: {e}", flush=True)
+
 def load_state(event_code):
     path = _state_file(event_code)
+    # Try local /tmp first
     try:
         with open(path) as f:
             s = json.load(f)
@@ -167,11 +191,30 @@ def load_state(event_code):
                 return s
     except Exception:
         pass
+    # Fallback: load from Drive
+    try:
+        name = _state_drive_name(event_code)
+        svc  = _drive()
+        resp = svc.files().list(
+            q=f"name='{name}' and trashed=false",
+            fields="files(id)", pageSize=1,
+        ).execute()
+        files = resp.get("files", [])
+        if files:
+            raw = download_file(files[0]["id"])
+            s   = json.loads(raw)
+            with open(path, "w") as f:
+                json.dump(s, f)
+            print(f"[STATE] Loaded {event_code} state from Drive ({len(s.get('indexed_ids',[]))} ids)", flush=True)
+            return s
+    except Exception as e:
+        print(f"[STATE] Drive load error: {e}", flush=True)
     return {"indexed_ids": [], "file_map": {}}
 
 def save_state(event_code, state):
     with open(_state_file(event_code), "w") as f:
         json.dump(state, f)
+    threading.Thread(target=_save_state_to_drive, args=(event_code, state.copy()), daemon=True).start()
 
 # ── Conversation state ────────────────────────────────────────────────────────
 # { phone: { "state": str, "event_code": str|None, "ts": float } }
