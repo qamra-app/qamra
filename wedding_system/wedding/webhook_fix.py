@@ -490,14 +490,15 @@ def match_api():
     if not matches:
         return {"matches": [], "message": "No face found or no matches"}, 200
 
-    # Return results immediately — no Drive download
-    seen, results = set(), []
+    # Build results immediately — no Drive download
+    seen, results, file_ids = set(), [], []
     for m in matches:
         file_id = m["Face"]["ExternalImageId"]
         conf    = m["Similarity"]
         if file_id in seen:
             continue
         seen.add(file_id)
+        file_ids.append(file_id)
         entry = file_map.get(file_id, {})
         results.append({
             "url":        f"{APP_URL}/photo/{file_id}",
@@ -505,10 +506,42 @@ def match_api():
             "name":       entry.get("name", ""),
             "drive_link": entry.get("link", ""),
         })
-        if len(results) >= 4096:
-            break
 
-    return {"matches": results}, 200
+    # Create personal Drive folder instantly, add shortcuts in background
+    folder_url = ""
+    try:
+        svc = _drive(write=True)
+        folder = svc.files().create(body={
+            "name": f"صورك من الحفل 🌙",
+            "mimeType": "application/vnd.google-apps.folder",
+        }, fields="id").execute()
+        folder_id = folder["id"]
+        svc.permissions().create(
+            fileId=folder_id,
+            body={"type": "anyone", "role": "reader"},
+        ).execute()
+        folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+
+        # Add shortcuts in background so we return immediately
+        def _add_shortcuts(fid_list, fold_id):
+            s = _drive(write=True)
+            for fid in fid_list:
+                try:
+                    s.files().create(body={
+                        "name": fid,
+                        "mimeType": "application/vnd.google-apps.shortcut",
+                        "shortcutDetails": {"targetId": fid},
+                        "parents": [fold_id],
+                    }, fields="id").execute()
+                except Exception as e:
+                    print(f"[FOLDER] shortcut error {fid}: {e}", flush=True)
+
+        threading.Thread(target=_add_shortcuts, args=(file_ids, folder_id), daemon=True).start()
+        print(f"[FOLDER] Created kiosk folder: {folder_url}", flush=True)
+    except Exception as e:
+        print(f"[FOLDER] Error creating folder: {e}", flush=True)
+
+    return {"matches": results, "folder_url": folder_url}, 200
 
 @app.route("/photo/<file_id>", methods=["GET"])
 def serve_photo(file_id):
