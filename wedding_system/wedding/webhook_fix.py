@@ -85,6 +85,39 @@ def list_drive_photos():
             break
     return results
 
+def create_guest_folder(sender, file_ids):
+    """Create a Drive folder with shortcuts to matched photos, return shareable link."""
+    svc = _drive(write=True)
+    # Create folder named after sender number
+    phone = sender.replace("whatsapp:", "").replace("+", "")
+    folder = svc.files().create(body={
+        "name": f"صورك من الحفل 🌙 — {phone}",
+        "mimeType": "application/vnd.google-apps.folder",
+    }, fields="id").execute()
+    folder_id = folder["id"]
+
+    # Create a shortcut for each matched photo
+    for file_id in file_ids:
+        try:
+            svc.files().create(body={
+                "name": file_id,
+                "mimeType": "application/vnd.google-apps.shortcut",
+                "shortcutDetails": {"targetId": file_id},
+                "parents": [folder_id],
+            }, fields="id").execute()
+        except Exception as e:
+            print(f"[FOLDER] shortcut error {file_id}: {e}", flush=True)
+
+    # Make folder public (anyone with link can view)
+    svc.permissions().create(
+        fileId=folder_id,
+        body={"type": "anyone", "role": "reader"},
+    ).execute()
+
+    link = f"https://drive.google.com/drive/folders/{folder_id}"
+    print(f"[FOLDER] Created guest folder: {link}", flush=True)
+    return link
+
 def download_file(file_id):
     svc = _drive()
     req = svc.files().get_media(fileId=file_id)
@@ -339,19 +372,17 @@ def search_and_send(selfie_bytes, sender):
         except Exception as e:
             print(f"[REPLY] ERROR photo {i+1}: {e}", flush=True)
 
-    # Send remaining photos (11+) as Google Drive links
-    if len(matched_entries) > 10:
-        remaining = matched_entries[10:]
-        links_text = "\n".join([f"📷 {entry.get('link','')}" for _, entry in remaining if entry.get('link')])
-        if links_text:
-            try:
-                time.sleep(2)
-                twilio_client.messages.create(
-                    from_=TWILIO_WHATSAPP, to=sender,
-                    body=f"📂 باقي الصور ({len(remaining)} صورة):\n\n{links_text}"
-                )
-            except Exception as e:
-                print(f"[REPLY] ERROR sending remaining links: {e}", flush=True)
+    # Create personal folder with shortcuts to all matched photos and send link
+    try:
+        all_file_ids = [fid for fid, _ in matched_entries]
+        folder_link = create_guest_folder(sender, all_file_ids)
+        time.sleep(2)
+        twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP, to=sender,
+            body=f"📂 جميع صورك ({len(matched_entries)} صورة) في مجلد خاص بك:\n\n{folder_link}"
+        )
+    except Exception as e:
+        print(f"[REPLY] ERROR creating guest folder: {e}", flush=True)
 
     time.sleep(3)  # wait for all photos to deliver before closing message
 
