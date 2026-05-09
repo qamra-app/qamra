@@ -1057,10 +1057,10 @@ def whatsapp_webhook():
     # Reset keywords
     if any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start", "مرحبا")):
         _clear_conv(sender)
-        _set_conv(sender, "routing")
+        state = "new"
 
-    # New user or reset
-    if state in ("new", "routing") and upper not in _events:
+    # New user — show menu
+    if state == "new":
         _set_conv(sender, "routing")
         msg.body(
             "🌙 أهلاً وسهلاً!\n\n"
