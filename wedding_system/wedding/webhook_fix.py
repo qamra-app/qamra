@@ -333,6 +333,7 @@ def search_and_send(selfie_bytes, sender):
                 )
                 sent += 1
                 print(f"[REPLY] OK photo {i+1}/{len(matched_entries)}", flush=True)
+                time.sleep(2)  # keep delivery order
             else:
                 print(f"[REPLY] save_jpeg returned False for photo {i+1}", flush=True)
         except Exception as e:
@@ -344,12 +345,15 @@ def search_and_send(selfie_bytes, sender):
         links_text = "\n".join([f"📷 {entry.get('link','')}" for _, entry in remaining if entry.get('link')])
         if links_text:
             try:
+                time.sleep(2)
                 twilio_client.messages.create(
                     from_=TWILIO_WHATSAPP, to=sender,
                     body=f"📂 باقي الصور ({len(remaining)} صورة):\n\n{links_text}"
                 )
             except Exception as e:
                 print(f"[REPLY] ERROR sending remaining links: {e}", flush=True)
+
+    time.sleep(3)  # wait for all photos to deliver before closing message
 
     if sent == 0:
         try:
