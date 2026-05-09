@@ -858,8 +858,13 @@ def whatsapp_webhook():
             return str(resp)
 
         event_code = conv.get("event_code")
+        # Auto-select if only one event is registered
+        if (not event_code or not get_event(event_code)) and len(_events) == 1:
+            event_code = next(iter(_events))
+            _set_conv(sender, "awaiting_selfie", event_code=event_code)
         if not event_code or not get_event(event_code):
-            msg.body("⚠️ ما عندك حفل محدد. امسح QR الكود من الحفل أو أرسل كود الحفل أولاً.")
+            codes = ", ".join(_events.keys()) if _events else "(لا يوجد أحداث)"
+            msg.body(f"⚠️ أرسل كود الحفل أولاً ثم أعد إرسال الصورة.\nالأحداث المتاحة: {codes}")
             return str(resp)
 
         selfie_bytes = None
@@ -928,6 +933,16 @@ def whatsapp_webhook():
 
     if state == "routing":
         if body_text in ("1", "١") or any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل")):
+            # If only one event, skip code selection
+            if len(_events) == 1:
+                only_code  = next(iter(_events))
+                only_event = _events[only_code]
+                _set_conv(sender, "awaiting_selfie", event_code=only_code)
+                msg.body(
+                    f"✨ أهلاً بك في *{only_event['name']}*!\n\n"
+                    "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من الحفل 🎉📸"
+                )
+                return str(resp)
             _set_conv(sender, "awaiting_event_code")
             codes = ", ".join(_events.keys()) if _events else "(لا يوجد أحداث مسجلة)"
             msg.body(
