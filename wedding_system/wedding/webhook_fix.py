@@ -420,19 +420,41 @@ def search_and_send(selfie_bytes, sender, event_code):
             seen_ids.add(file_id)
             file_ids.append(file_id)
 
-    count = len(file_ids)
+    count    = len(file_ids)
+    PREVIEW  = 10  # photos sent directly, rest via Drive folder
+
     twilio_client.messages.create(
         from_=TWILIO_WHATSAPP, to=sender,
-        body=f"✅ وجدت {count} صورة لك من {event['name']} 🎉 — جاري إنشاء مجلدك الخاص..."
+        body=f"✅ وجدت {count} صورة لك من {event['name']} 🎉 — جاري إرسال أول {min(count, PREVIEW)} صور..."
     )
 
+    uid  = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:8]
+    sent = 0
+    for i, file_id in enumerate(file_ids[:PREVIEW]):
+        try:
+            raw      = download_file(file_id)
+            img_name = f"qamra_{uid}_{i+1}.jpg"
+            img_path = os.path.join(MEDIA_DIR, img_name)
+            if save_jpeg(raw, img_path):
+                twilio_client.messages.create(
+                    from_=TWILIO_WHATSAPP, to=sender,
+                    body=f"📷 {i+1}/{min(count, PREVIEW)}",
+                    media_url=[f"{APP_URL}/media/{img_name}"]
+                )
+                sent += 1
+                time.sleep(1)
+        except Exception as e:
+            print(f"[REPLY] ERROR photo {i+1}: {e}", flush=True)
+
+    # Drive folder with ALL matched photos
     try:
         phone_label = sender.replace("whatsapp:", "").replace("+", "")
         folder_link = create_guest_folder(phone_label, file_ids, event["name"])
+        remaining   = count - sent
         twilio_client.messages.create(
             from_=TWILIO_WHATSAPP, to=sender,
             body=(
-                f"📂 مجلدك الخاص جاهز! فيه {count} صورة:\n\n"
+                f"📂 جميع صورك ({count} صورة) في مجلدك الخاص:\n\n"
                 f"{folder_link}\n\n"
                 "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
             )
