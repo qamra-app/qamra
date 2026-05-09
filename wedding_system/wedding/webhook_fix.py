@@ -467,6 +467,7 @@ def match_api():
     """
     selfie_bytes = None
 
+    phone = request.form.get("phone", "").strip()
     if "photo" in request.files:
         selfie_bytes = request.files["photo"].read()
     elif request.is_json and request.json.get("image_url"):
@@ -511,8 +512,9 @@ def match_api():
     folder_url = ""
     try:
         svc = _drive(write=True)
+        folder_name = f"صورك من الحفل 🌙 — {phone}" if phone else "صورك من الحفل 🌙"
         folder = svc.files().create(body={
-            "name": f"صورك من الحفل 🌙",
+            "name": folder_name,
             "mimeType": "application/vnd.google-apps.folder",
         }, fields="id").execute()
         folder_id = folder["id"]
