@@ -313,7 +313,7 @@ def search_and_send(selfie_bytes, sender):
     except Exception as e:
         print(f"[REPLY] ERROR sending summary to {sender}: {e}", flush=True)
 
-    # Download and send each photo as individual JPEG (max 10)
+    # Download and send first 10 photos as images, rest as Drive links
     sent = 0
     uid  = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:8]
     for i, (file_id, entry) in enumerate(matched_entries[:10]):
@@ -337,6 +337,19 @@ def search_and_send(selfie_bytes, sender):
                 print(f"[REPLY] save_jpeg returned False for photo {i+1}", flush=True)
         except Exception as e:
             print(f"[REPLY] ERROR photo {i+1}: {e}", flush=True)
+
+    # Send remaining photos (11+) as Google Drive links
+    if len(matched_entries) > 10:
+        remaining = matched_entries[10:]
+        links_text = "\n".join([f"📷 {entry.get('link','')}" for _, entry in remaining if entry.get('link')])
+        if links_text:
+            try:
+                twilio_client.messages.create(
+                    from_=TWILIO_WHATSAPP, to=sender,
+                    body=f"📂 باقي الصور ({len(remaining)} صورة):\n\n{links_text}"
+                )
+            except Exception as e:
+                print(f"[REPLY] ERROR sending remaining links: {e}", flush=True)
 
     if sent == 0:
         try:
