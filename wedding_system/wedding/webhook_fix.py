@@ -506,8 +506,17 @@ def match_api():
     event_code = request.form.get("event_code", "").upper().strip()
     phone      = request.form.get("phone", "").strip()
     event      = get_event(event_code)
+
+    # Auto-select if no event code provided
     if not event:
-        return jsonify({"error": f"Unknown event: {event_code}. Register it first via /admin/event"}), 404
+        todays = get_todays_events()
+        if len(todays) == 1:
+            event_code, event = todays[0]
+        elif len(_events) == 1:
+            event_code = next(iter(_events))
+            event = _events[event_code]
+        else:
+            return jsonify({"error": f"No active event found. Register events via /admin"}), 404
 
     selfie_bytes = None
     if "photo" in request.files:
