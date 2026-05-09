@@ -414,18 +414,32 @@ def create_guest_folder(sender_label, file_ids, event_name):
         fileId=folder_id,
         body={"type": "anyone", "role": "reader"},
     ).execute()
-    for fid in file_ids:
-        try:
-            svc.files().create(body={
-                "name": fid,
-                "mimeType": "application/vnd.google-apps.shortcut",
-                "shortcutDetails": {"targetId": fid},
-                "parents": [folder_id],
-            }, fields="id").execute()
-        except Exception as e:
-            print(f"[FOLDER] shortcut error {fid}: {e}", flush=True)
+
+    # Create shortcuts in batches of 100 (Drive batch API limit)
+    errors = []
+    def _batch_cb(request_id, response, exception):
+        if exception:
+            errors.append(str(exception))
+
+    for chunk_start in range(0, len(file_ids), 100):
+        batch = svc.new_batch_http_request(callback=_batch_cb)
+        for fid in file_ids[chunk_start:chunk_start + 100]:
+            batch.add(svc.files().create(
+                body={
+                    "name": fid,
+                    "mimeType": "application/vnd.google-apps.shortcut",
+                    "shortcutDetails": {"targetId": fid},
+                    "parents": [folder_id],
+                },
+                fields="id"
+            ))
+        batch.execute()
+
+    if errors:
+        print(f"[FOLDER] {len(errors)} shortcut errors", flush=True)
+
     link = f"https://drive.google.com/drive/folders/{folder_id}"
-    print(f"[FOLDER] Created: {link}", flush=True)
+    print(f"[FOLDER] Created: {link} ({len(file_ids)} shortcuts)", flush=True)
     return link
 
 # ── WhatsApp search + send ────────────────────────────────────────────────────
