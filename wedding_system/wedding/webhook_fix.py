@@ -586,7 +586,14 @@ def admin_list_events():
 def admin_add_event():
     """
     Register a new wedding event.
-    POST JSON: { "code": "AHMED2026", "name": "حفل أحمد", "collection_id": "qamra-ahmed2026", "gdrive_folder_id": "1ABC..." }
+    POST JSON: {
+      "code": "AHMED2026",
+      "name": "حفل أحمد ومريم",
+      "collection_id": "qamra-ahmed2026",
+      "gdrive_folder_id": "1ABC...",
+      "drive_url": "https://drive.google.com/drive/folders/...",  (optional — public album link)
+      "kiosk_url": "http://192.168.1.10:5000?event=AHMED2026"     (optional — local kiosk URL)
+    }
     Header: X-Admin-Token: <token>
     """
     if not _check_admin():
@@ -603,13 +610,13 @@ def admin_add_event():
             "name":             data["name"],
             "collection_id":    data["collection_id"],
             "gdrive_folder_id": data["gdrive_folder_id"],
+            "drive_url":        data.get("drive_url", ""),
+            "kiosk_url":        data.get("kiosk_url", ""),
         }
         save_events()
 
-    # Start indexing in background
     threading.Thread(target=run_index, args=(code,), daemon=True).start()
-
-    return jsonify({"status": "created", "event": code, "indexing": "started"}), 201
+    return jsonify({"status": "created", "event": code, "indexing": "started", "landing": f"{APP_URL}/event/{code}"}), 201
 
 @app.route("/admin/event/<code>", methods=["DELETE"])
 def admin_delete_event(code):
@@ -624,6 +631,98 @@ def admin_delete_event(code):
     return jsonify({"status": "deleted", "event": code}), 200
 
 # ── WhatsApp webhook ──────────────────────────────────────────────────────────
+@app.route("/event/<code>", methods=["GET"])
+def event_landing(code):
+    event = get_event(code.upper())
+    if not event:
+        return "حفل غير موجود", 404
+
+    wa_number  = TWILIO_WHATSAPP.replace("whatsapp:", "").replace("+", "")
+    wa_link    = f"https://wa.me/{wa_number}?text={code.upper()}"
+    drive_url  = event.get("drive_url", "")
+    kiosk_url  = event.get("kiosk_url", "")
+    name       = event["name"]
+
+    cards = ""
+    if drive_url:
+        cards += f"""
+        <a href="{drive_url}" target="_blank" class="card">
+          <div class="icon">🖼️</div>
+          <div class="label">شاهد جميع صور الحفل</div>
+          <div class="sub">Google Drive — ألبوم الحفل كاملاً</div>
+        </a>"""
+
+    cards += f"""
+        <a href="{wa_link}" target="_blank" class="card highlight">
+          <div class="icon">📸</div>
+          <div class="label">ابحث عن صورك</div>
+          <div class="sub">أرسل سيلفي عبر واتساب وسنجد صورك خلال ثوانٍ</div>
+        </a>"""
+
+    if kiosk_url:
+        cards += f"""
+        <a href="{kiosk_url}" target="_blank" class="card">
+          <div class="icon">🖥️</div>
+          <div class="label">استخدم الكشك</div>
+          <div class="sub">ابحث عن صورك عبر الكشك الذكي في الحفل</div>
+        </a>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>قمرة — {name}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    background: #0E0B08;
+    color: #FAF6EC;
+    font-family: -apple-system, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }}
+  .logo {{ font-size: 36px; margin-bottom: 8px; }}
+  .brand {{ font-size: 13px; color: #C9A96E; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 32px; }}
+  h1 {{ font-size: 22px; font-weight: 600; text-align: center; margin-bottom: 8px; line-height: 1.4; }}
+  .sub {{ font-size: 13px; color: #999; margin-bottom: 36px; text-align: center; }}
+  .cards {{ width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 14px; }}
+  .card {{
+    display: flex; align-items: center; gap: 16px;
+    background: rgba(250,246,236,0.06);
+    border: 1px solid rgba(250,246,236,0.1);
+    border-radius: 16px;
+    padding: 20px;
+    text-decoration: none;
+    color: #FAF6EC;
+    transition: background 0.2s;
+  }}
+  .card:active {{ background: rgba(250,246,236,0.12); }}
+  .card.highlight {{
+    background: rgba(201,169,110,0.15);
+    border-color: rgba(201,169,110,0.4);
+  }}
+  .icon {{ font-size: 32px; flex-shrink: 0; }}
+  .label {{ font-size: 16px; font-weight: 600; margin-bottom: 3px; }}
+  .sub {{ font-size: 12px; color: #aaa; margin: 0; text-align: right; }}
+  .footer {{ margin-top: 40px; font-size: 11px; color: #555; }}
+</style>
+</head>
+<body>
+  <div class="logo">🌙</div>
+  <div class="brand">QAMRA</div>
+  <h1>{name}</h1>
+  <p class="sub">اختر كيف تريد الوصول لصورك</p>
+  <div class="cards">{cards}</div>
+  <div class="footer">Powered by QAMRA 🌙</div>
+</body>
+</html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     num_media = int(request.form.get("NumMedia", 0))
