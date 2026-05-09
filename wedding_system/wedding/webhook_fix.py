@@ -133,6 +133,12 @@ def save_events():
 def get_event(code):
     return _events.get(code.upper().strip())
 
+def get_todays_events():
+    """Return list of (code, event) tuples for weddings happening today."""
+    from datetime import date
+    today = date.today().isoformat()
+    return [(c, e) for c, e in _events.items() if e.get("date", "") == today]
+
 load_events()
 
 # ── Per-event state ───────────────────────────────────────────────────────────
@@ -656,7 +662,8 @@ input:focus{{border-color:#C9A96E}}
       <div><label>Rekognition Collection ID</label><input name="collection_id" placeholder="qamra-ahmed2026" required></div>
       <div><label>Google Drive Folder ID</label><input name="gdrive_folder_id" placeholder="1ABC..." required></div>
     </div>
-    <div class="form-row full">
+    <div class="form-row">
+      <div><label>تاريخ الحفل</label><input name="date" type="date" required></div>
       <div><label>رابط ألبوم Drive العام (اختياري)</label><input name="drive_url" placeholder="https://drive.google.com/drive/folders/..."></div>
     </div>
     <div class="form-row full">
@@ -729,6 +736,7 @@ def admin_add_event():
             "gdrive_folder_id": data["gdrive_folder_id"],
             "drive_url":        data.get("drive_url", ""),
             "kiosk_url":        data.get("kiosk_url", ""),
+            "date":             data.get("date", ""),   # YYYY-MM-DD
         }
         save_events()
 
@@ -858,14 +866,26 @@ def whatsapp_webhook():
             return str(resp)
 
         event_code = conv.get("event_code")
-        # Auto-select if only one event is registered
-        if (not event_code or not get_event(event_code)) and len(_events) == 1:
-            event_code = next(iter(_events))
-            _set_conv(sender, "awaiting_selfie", event_code=event_code)
         if not event_code or not get_event(event_code):
-            codes = ", ".join(_events.keys()) if _events else "(لا يوجد أحداث)"
-            msg.body(f"⚠️ أرسل كود الحفل أولاً ثم أعد إرسال الصورة.\nالأحداث المتاحة: {codes}")
-            return str(resp)
+            todays = get_todays_events()
+            if len(todays) == 1:
+                # Exactly one wedding today — auto-select
+                event_code = todays[0][0]
+                _set_conv(sender, "awaiting_selfie", event_code=event_code)
+            elif len(_events) == 1:
+                # Only one wedding ever registered — auto-select
+                event_code = next(iter(_events))
+                _set_conv(sender, "awaiting_selfie", event_code=event_code)
+            elif len(todays) > 1:
+                # Multiple weddings today — show numbered list
+                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(todays))
+                _set_conv(sender, "choosing_event")
+                _conv[sender]["today_events"] = [c for c, _ in todays]
+                msg.body(f"🌙 فيه أكثر من حفل اليوم، اختر الحفل الذي أنت فيه:\n\n{options}")
+                return str(resp)
+            else:
+                msg.body("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
+                return str(resp)
 
         selfie_bytes = None
         for auth in [None, (TWILIO_SID, TWILIO_TOKEN)]:
@@ -905,7 +925,24 @@ def whatsapp_webhook():
     # ── Text received ─────────────────────────────────────────────────────────
     upper = body_text.upper().strip()
 
-    # Check if the text is a registered event code
+    # Guest choosing between multiple today's weddings
+    if state == "choosing_event":
+        today_list = conv.get("today_events", [])
+        try:
+            idx = int(body_text.strip()) - 1
+            if 0 <= idx < len(today_list):
+                chosen = today_list[idx]
+                event  = get_event(chosen)
+                _set_conv(sender, "awaiting_selfie", event_code=chosen)
+                msg.body(f"✨ اخترت *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد صورك 📸")
+                return str(resp)
+        except (ValueError, TypeError):
+            pass
+        options = "\n".join(f"*{i+1}* — {get_event(c)['name']}" for i, c in enumerate(today_list))
+        msg.body(f"أرسل رقم الحفل:\n\n{options}")
+        return str(resp)
+
+    # Check if the text is a registered event code (from QR)
     if upper in _events:
         event = _events[upper]
         _set_conv(sender, "awaiting_selfie", event_code=upper)
@@ -933,15 +970,24 @@ def whatsapp_webhook():
 
     if state == "routing":
         if body_text in ("1", "١") or any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل")):
-            # If only one event, skip code selection
-            if len(_events) == 1:
-                only_code  = next(iter(_events))
-                only_event = _events[only_code]
-                _set_conv(sender, "awaiting_selfie", event_code=only_code)
-                msg.body(
-                    f"✨ أهلاً بك في *{only_event['name']}*!\n\n"
-                    "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من الحفل 🎉📸"
-                )
+            todays = get_todays_events()
+            if len(todays) == 1:
+                code  = todays[0][0]
+                event = todays[0][1]
+                _set_conv(sender, "awaiting_selfie", event_code=code)
+                msg.body(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك 🎉📸")
+                return str(resp)
+            elif len(_events) == 1:
+                code  = next(iter(_events))
+                event = _events[code]
+                _set_conv(sender, "awaiting_selfie", event_code=code)
+                msg.body(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك 🎉📸")
+                return str(resp)
+            elif len(todays) > 1:
+                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(todays))
+                _set_conv(sender, "choosing_event")
+                _conv[sender]["today_events"] = [c for c, _ in todays]
+                msg.body(f"🌙 فيه أكثر من حفل اليوم، اختر الحفل الذي أنت فيه:\n\n{options}")
                 return str(resp)
             _set_conv(sender, "awaiting_event_code")
             codes = ", ".join(_events.keys()) if _events else "(لا يوجد أحداث مسجلة)"
