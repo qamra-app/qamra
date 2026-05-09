@@ -8,7 +8,7 @@ import requests
 
 import boto3
 from botocore.exceptions import ClientError
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 from google.oauth2 import service_account
@@ -25,33 +25,15 @@ TWILIO_WHATSAPP         = os.environ["TWILIO_WHATSAPP"]
 AWS_ACCESS_KEY_ID       = os.environ["AWS_ACCESS_KEY_ID"]
 AWS_SECRET_ACCESS_KEY   = os.environ["AWS_SECRET_ACCESS_KEY"]
 AWS_REGION              = os.environ.get("AWS_REGION", "us-east-1")
-GDRIVE_FOLDER_ID        = os.environ["GDRIVE_FOLDER_ID"]
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 APP_URL                 = os.environ.get("APP_URL", "https://qamra-production.up.railway.app")
+ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "qamra-admin-2026")
+OWNER_WHATSAPP          = "whatsapp:+97470263297"
 
-COLLECTION_ID    = "qamra-wedding"
-MATCH_CONF       = 80
-LOCAL_STATE_FILE = "/tmp/qamra_state.json"
-MEDIA_DIR        = "/tmp/qamra_media"
-OWNER_WHATSAPP   = "whatsapp:+97470263297"
-
-# In-memory conversation state per user: phone -> {"state": str, "ts": float}
-_conv = {}
-# Kiosk folder cache: session_id -> folder_url (None = building, "" = failed)
-_folder_cache = {}
-_CONV_TTL = 3600  # 1 hour
-
-def _get_state(phone):
-    e = _conv.get(phone)
-    if e and (time.time() - e["ts"]) < _CONV_TTL:
-        return e["state"]
-    return "new"
-
-def _set_state(phone, state):
-    _conv[phone] = {"state": state, "ts": time.time()}
-
-def _clear_state(phone):
-    _conv.pop(phone, None)
+MATCH_CONF  = 80
+MEDIA_DIR   = "/tmp/qamra_media"
+EVENTS_FILE = "/tmp/qamra_events.json"   # ephemeral; backed up to Drive
+EVENTS_DRIVE_NAME = "_qamra_events_.json"
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
@@ -68,57 +50,8 @@ def _drive(write=False):
     scope = ("https://www.googleapis.com/auth/drive" if write
              else "https://www.googleapis.com/auth/drive.readonly")
     creds = service_account.Credentials.from_service_account_info(
-        json.loads(GOOGLE_CREDENTIALS_JSON), scopes=[scope]
-    )
+        json.loads(GOOGLE_CREDENTIALS_JSON), scopes=[scope])
     return build("drive", "v3", credentials=creds)
-
-def list_drive_photos():
-    svc = _drive()
-    results, pt = [], None
-    while True:
-        resp = svc.files().list(
-            q=f"'{GDRIVE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed=false",
-            fields="nextPageToken, files(id, name, webViewLink)",
-            pageSize=200, pageToken=pt
-        ).execute()
-        results.extend(resp.get("files", []))
-        pt = resp.get("nextPageToken")
-        if not pt:
-            break
-    return results
-
-def create_guest_folder(sender, file_ids):
-    """Create a Drive folder with shortcuts to matched photos, return shareable link."""
-    svc = _drive(write=True)
-    # Create folder named after sender number
-    phone = sender.replace("whatsapp:", "").replace("+", "")
-    folder = svc.files().create(body={
-        "name": f"صورك من الحفل 🌙 — {phone}",
-        "mimeType": "application/vnd.google-apps.folder",
-    }, fields="id").execute()
-    folder_id = folder["id"]
-
-    # Create a shortcut for each matched photo
-    for file_id in file_ids:
-        try:
-            svc.files().create(body={
-                "name": file_id,
-                "mimeType": "application/vnd.google-apps.shortcut",
-                "shortcutDetails": {"targetId": file_id},
-                "parents": [folder_id],
-            }, fields="id").execute()
-        except Exception as e:
-            print(f"[FOLDER] shortcut error {file_id}: {e}", flush=True)
-
-    # Make folder public (anyone with link can view)
-    svc.permissions().create(
-        fileId=folder_id,
-        body={"type": "anyone", "role": "reader"},
-    ).execute()
-
-    link = f"https://drive.google.com/drive/folders/{folder_id}"
-    print(f"[FOLDER] Created guest folder: {link}", flush=True)
-    return link
 
 def download_file(file_id):
     svc = _drive()
@@ -130,10 +63,86 @@ def download_file(file_id):
         _, done = dl.next_chunk()
     return buf.getvalue()
 
-# ── State persistence ─────────────────────────────────────────────────────────
-def load_state():
+# ── Events registry ───────────────────────────────────────────────────────────
+# Structure: { "event_code": { "name", "collection_id", "gdrive_folder_id" }, ... }
+_events      = {}
+_events_lock = threading.Lock()
+
+def _events_drive_file_id():
+    """Find the Drive file ID for _qamra_events_.json, or None."""
     try:
-        with open(LOCAL_STATE_FILE) as f:
+        svc  = _drive()
+        resp = svc.files().list(
+            q=f"name='{EVENTS_DRIVE_NAME}' and trashed=false",
+            fields="files(id)", pageSize=1,
+        ).execute()
+        files = resp.get("files", [])
+        return files[0]["id"] if files else None
+    except Exception as e:
+        print(f"[EVENTS] Drive lookup error: {e}", flush=True)
+        return None
+
+def _save_events_to_drive(data):
+    try:
+        svc     = _drive(write=True)
+        content = json.dumps(data, ensure_ascii=False, indent=2).encode()
+        fid     = _events_drive_file_id()
+        from googleapiclient.http import MediaInMemoryUpload
+        media = MediaInMemoryUpload(content, mimetype="application/json")
+        if fid:
+            svc.files().update(fileId=fid, media_body=media).execute()
+        else:
+            svc.files().create(
+                body={"name": EVENTS_DRIVE_NAME},
+                media_body=media, fields="id",
+            ).execute()
+        print(f"[EVENTS] Saved {len(data)} events to Drive", flush=True)
+    except Exception as e:
+        print(f"[EVENTS] Drive save error: {e}", flush=True)
+
+def load_events():
+    global _events
+    # Try local file first
+    if os.path.exists(EVENTS_FILE):
+        try:
+            with open(EVENTS_FILE) as f:
+                _events = json.load(f)
+            print(f"[EVENTS] Loaded {len(_events)} events from local file", flush=True)
+            return
+        except Exception:
+            pass
+    # Fallback: load from Drive
+    try:
+        fid = _events_drive_file_id()
+        if fid:
+            raw = download_file(fid)
+            _events = json.loads(raw)
+            with open(EVENTS_FILE, "w") as f:
+                json.dump(_events, f)
+            print(f"[EVENTS] Loaded {len(_events)} events from Drive", flush=True)
+        else:
+            print("[EVENTS] No events config found — start fresh.", flush=True)
+    except Exception as e:
+        print(f"[EVENTS] Load error: {e}", flush=True)
+
+def save_events():
+    with open(EVENTS_FILE, "w") as f:
+        json.dump(_events, f, ensure_ascii=False)
+    threading.Thread(target=_save_events_to_drive, args=(_events.copy(),), daemon=True).start()
+
+def get_event(code):
+    return _events.get(code.upper().strip())
+
+load_events()
+
+# ── Per-event state ───────────────────────────────────────────────────────────
+def _state_file(event_code):
+    return f"/tmp/qamra_state_{event_code}.json"
+
+def load_state(event_code):
+    path = _state_file(event_code)
+    try:
+        with open(path) as f:
             s = json.load(f)
             if s.get("indexed_ids") is not None:
                 return s
@@ -141,13 +150,37 @@ def load_state():
         pass
     return {"indexed_ids": [], "file_map": {}}
 
-def save_state(state):
-    with open(LOCAL_STATE_FILE, "w") as f:
+def save_state(event_code, state):
+    with open(_state_file(event_code), "w") as f:
         json.dump(state, f)
+
+# ── Conversation state ────────────────────────────────────────────────────────
+# { phone: { "state": str, "event_code": str|None, "ts": float } }
+_conv     = {}
+_CONV_TTL = 3600
+
+def _get_conv(phone):
+    e = _conv.get(phone)
+    if e and (time.time() - e["ts"]) < _CONV_TTL:
+        return e
+    return {"state": "new", "event_code": None}
+
+def _set_conv(phone, state, event_code=None):
+    prev = _get_conv(phone)
+    _conv[phone] = {
+        "state":      state,
+        "event_code": event_code if event_code is not None else prev.get("event_code"),
+        "ts":         time.time(),
+    }
+
+def _clear_conv(phone):
+    _conv.pop(phone, None)
+
+# ── Kiosk folder cache ────────────────────────────────────────────────────────
+_folder_cache = {}  # session_id -> folder_url | None (building) | "" (failed)
 
 # ── Rekognition helpers ───────────────────────────────────────────────────────
 def resize_for_rekognition(image_bytes):
-    """Resize to max 5MB for Rekognition."""
     if len(image_bytes) <= 5 * 1024 * 1024:
         return image_bytes
     try:
@@ -162,54 +195,47 @@ def resize_for_rekognition(image_bytes):
         print(f"[RESIZE] {e}", flush=True)
         return image_bytes
 
-def ensure_collection():
+def ensure_collection(collection_id):
     try:
-        rek.create_collection(CollectionId=COLLECTION_ID)
-        print(f"[COLLECTION] Created: {COLLECTION_ID}", flush=True)
+        rek.create_collection(CollectionId=collection_id)
+        print(f"[COLLECTION] Created: {collection_id}", flush=True)
     except ClientError as e:
-        if e.response["Error"]["Code"] == "ResourceAlreadyExistsException":
-            print(f"[COLLECTION] Already exists: {COLLECTION_ID}", flush=True)
-        else:
+        if e.response["Error"]["Code"] != "ResourceAlreadyExistsException":
             raise
 
-def index_face(image_bytes, file_id):
+def index_face(image_bytes, file_id, collection_id):
     image_bytes = resize_for_rekognition(image_bytes)
     try:
         resp    = rek.index_faces(
-            CollectionId=COLLECTION_ID,
+            CollectionId=collection_id,
             Image={"Bytes": image_bytes},
             ExternalImageId=file_id,
             DetectionAttributes=[],
             QualityFilter="AUTO",
         )
-        indexed = len(resp.get("FaceRecords", []))
-        print(f"[INDEX] {indexed} face(s) indexed for file_id={file_id[:12]}...", flush=True)
-        return indexed
-    except ClientError as e:
-        print(f"[INDEX] Rekognition error: {e}", flush=True)
-        return 0
+        return len(resp.get("FaceRecords", []))
     except Exception as e:
         print(f"[INDEX] Error: {e}", flush=True)
         return 0
 
-def search_by_selfie(selfie_bytes):
+def search_by_selfie(selfie_bytes, collection_id):
     selfie_bytes = resize_for_rekognition(selfie_bytes)
     try:
         resp    = rek.search_faces_by_image(
-            CollectionId=COLLECTION_ID,
+            CollectionId=collection_id,
             Image={"Bytes": selfie_bytes},
             MaxFaces=4096,
             FaceMatchThreshold=MATCH_CONF,
         )
         matches = resp.get("FaceMatches", [])
-        print(f"[SEARCH] {len(matches)} matches (threshold={MATCH_CONF})", flush=True)
+        print(f"[SEARCH] {len(matches)} matches in {collection_id}", flush=True)
         return matches
     except ClientError as e:
         code = e.response["Error"]["Code"]
         if code == "InvalidParameterException":
-            print("[SEARCH] No face detected in selfie", flush=True)
+            print("[SEARCH] No face detected", flush=True)
         else:
-            print(f"[SEARCH] Rekognition error: {e}", flush=True)
+            print(f"[SEARCH] Error: {e}", flush=True)
         return []
     except Exception as e:
         print(f"[SEARCH] Error: {e}", flush=True)
@@ -218,7 +244,7 @@ def search_by_selfie(selfie_bytes):
 def save_jpeg(image_bytes, output_path):
     try:
         img = Image.open(io.BytesIO(image_bytes))
-        img = ImageOps.exif_transpose(img)  # fix landscape rotation
+        img = ImageOps.exif_transpose(img)
         img = img.convert("RGB")
         if img.width > 1920:
             ratio = 1920 / img.width
@@ -229,79 +255,128 @@ def save_jpeg(image_bytes, output_path):
         print(f"[JPEG] Error: {e}", flush=True)
         return False
 
-# ── Indexing ──────────────────────────────────────────────────────────────────
-_index_lock = threading.Lock()
+def list_drive_photos(gdrive_folder_id):
+    svc = _drive()
+    results, pt = [], None
+    while True:
+        resp = svc.files().list(
+            q=f"'{gdrive_folder_id}' in parents and mimeType contains 'image/' and trashed=false",
+            fields="nextPageToken, files(id, name, webViewLink)",
+            pageSize=200, pageToken=pt,
+        ).execute()
+        results.extend(resp.get("files", []))
+        pt = resp.get("nextPageToken")
+        if not pt:
+            break
+    return results
 
-def run_index():
-    if not _index_lock.acquire(blocking=False):
-        print("[INDEX] Already running, skipping.", flush=True)
+# ── Indexing ──────────────────────────────────────────────────────────────────
+_index_locks = {}
+
+def run_index(event_code):
+    event = get_event(event_code)
+    if not event:
+        print(f"[INDEX] Unknown event: {event_code}", flush=True)
+        return 0
+
+    collection_id    = event["collection_id"]
+    gdrive_folder_id = event["gdrive_folder_id"]
+
+    lock = _index_locks.setdefault(event_code, threading.Lock())
+    if not lock.acquire(blocking=False):
+        print(f"[INDEX] Already running for {event_code}", flush=True)
         return 0
     try:
-        ensure_collection()
-        state       = load_state()
+        ensure_collection(collection_id)
+        state       = load_state(event_code)
         indexed_ids = set(state.get("indexed_ids", []))
         file_map    = state.get("file_map", {})
 
-        try:
-            photos = list_drive_photos()
-        except Exception as e:
-            print(f"[INDEX] Drive list error: {e}", flush=True)
-            return 0
+        photos = list_drive_photos(gdrive_folder_id)
+        print(f"[INDEX] {event_code}: {len(photos)} photos, {len(indexed_ids)} indexed", flush=True)
 
-        print(f"[INDEX] {len(photos)} photos in Drive, {len(indexed_ids)} already indexed", flush=True)
         new_count = 0
-
         for i, photo in enumerate(photos):
             if photo["id"] in indexed_ids:
                 continue
             try:
                 img_bytes = download_file(photo["id"])
-                n = index_face(img_bytes, photo["id"])
+                n = index_face(img_bytes, photo["id"], collection_id)
                 if n > 0:
                     indexed_ids.add(photo["id"])
                     file_map[photo["id"]] = {"name": photo["name"], "link": photo["webViewLink"]}
                     new_count += n
                 else:
-                    print(f"[INDEX] No face found: {photo['name']}", flush=True)
+                    print(f"[INDEX] No face: {photo['name']}", flush=True)
             except Exception as e:
                 print(f"[INDEX] Error {photo['name']}: {e}", flush=True)
 
             if (i + 1) % 20 == 0:
                 state["indexed_ids"] = list(indexed_ids)
                 state["file_map"]    = file_map
-                save_state(state)
-                print(f"[INDEX] Progress: {i+1}/{len(photos)}, {new_count} new faces", flush=True)
+                save_state(event_code, state)
+                print(f"[INDEX] {event_code}: {i+1}/{len(photos)}, {new_count} new", flush=True)
 
         state["indexed_ids"] = list(indexed_ids)
         state["file_map"]    = file_map
-        save_state(state)
-        print(f"[INDEX] Complete: {len(indexed_ids)} photos indexed, {new_count} new faces", flush=True)
+        save_state(event_code, state)
+        print(f"[INDEX] {event_code}: done. {len(indexed_ids)} total, {new_count} new", flush=True)
         return len(indexed_ids)
     finally:
-        _index_lock.release()
+        lock.release()
 
-# ── Auto-index ────────────────────────────────────────────────────────────────
-AUTO_INDEX_INTERVAL = 60  # seconds (1 min)
-
+# ── Auto-index all events ─────────────────────────────────────────────────────
 def _auto_index_loop():
-    print("[AUTO-INDEX] Startup run starting...", flush=True)
-    try:
-        run_index()
-    except Exception as e:
-        print(f"[AUTO-INDEX] Startup error: {e}", flush=True)
+    time.sleep(5)  # wait for startup
     while True:
-        time.sleep(AUTO_INDEX_INTERVAL)
-        print("[AUTO-INDEX] Scheduled run starting...", flush=True)
-        try:
-            run_index()
-        except Exception as e:
-            print(f"[AUTO-INDEX] Error: {e}", flush=True)
+        with _events_lock:
+            codes = list(_events.keys())
+        for code in codes:
+            try:
+                run_index(code)
+            except Exception as e:
+                print(f"[AUTO-INDEX] {code} error: {e}", flush=True)
+        time.sleep(120)  # re-check every 2 minutes
 
 threading.Thread(target=_auto_index_loop, daemon=True).start()
 
-# ── Search + reply ────────────────────────────────────────────────────────────
-def search_and_send(selfie_bytes, sender):
-    state    = load_state()
+# ── Guest folder creation ─────────────────────────────────────────────────────
+def create_guest_folder(sender_label, file_ids, event_name):
+    svc = _drive(write=True)
+    folder = svc.files().create(body={
+        "name": f"صورك من {event_name} 🌙 — {sender_label}",
+        "mimeType": "application/vnd.google-apps.folder",
+    }, fields="id").execute()
+    folder_id = folder["id"]
+    svc.permissions().create(
+        fileId=folder_id,
+        body={"type": "anyone", "role": "reader"},
+    ).execute()
+    for fid in file_ids:
+        try:
+            svc.files().create(body={
+                "name": fid,
+                "mimeType": "application/vnd.google-apps.shortcut",
+                "shortcutDetails": {"targetId": fid},
+                "parents": [folder_id],
+            }, fields="id").execute()
+        except Exception as e:
+            print(f"[FOLDER] shortcut error {fid}: {e}", flush=True)
+    link = f"https://drive.google.com/drive/folders/{folder_id}"
+    print(f"[FOLDER] Created: {link}", flush=True)
+    return link
+
+# ── WhatsApp search + send ────────────────────────────────────────────────────
+def search_and_send(selfie_bytes, sender, event_code):
+    event    = get_event(event_code)
+    if not event:
+        twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP, to=sender,
+            body="⚠️ الحفل غير موجود. تأكد من الكود وحاول مرة ثانية."
+        )
+        return
+
+    state    = load_state(event_code)
     file_map = state.get("file_map", {})
 
     if not state.get("indexed_ids"):
@@ -311,7 +386,7 @@ def search_and_send(selfie_bytes, sender):
         )
         return
 
-    matches = search_by_selfie(selfie_bytes)
+    matches = search_by_selfie(selfie_bytes, event["collection_id"])
     if not matches:
         twilio_client.messages.create(
             from_=TWILIO_WHATSAPP, to=sender,
@@ -319,235 +394,83 @@ def search_and_send(selfie_bytes, sender):
         )
         return
 
-    # Deduplicate by file_id, collect matching Drive file IDs
     seen_ids, matched_entries = set(), []
     for m in matches:
-        file_id  = m["Face"]["ExternalImageId"]
-        conf     = m["Similarity"]
+        file_id = m["Face"]["ExternalImageId"]
+        conf    = m["Similarity"]
         if file_id not in seen_ids:
             seen_ids.add(file_id)
             entry = file_map.get(file_id, {"name": file_id, "link": ""})
             entry["conf"] = conf
             matched_entries.append((file_id, entry))
-            print(f"[MATCH] {entry['name']} conf={conf:.1f}", flush=True)
 
-    if not matched_entries:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body="😕 ما لقيت صورك. تأكد السيلفي واضح وحاول مرة ثانية."
-        )
-        return
+    twilio_client.messages.create(
+        from_=TWILIO_WHATSAPP, to=sender,
+        body=f"✅ وجدت {len(matched_entries)} صورة لك من {event['name']} 🎉 — جاري الإرسال..."
+    )
 
-    # Send summary message first
-    try:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body=f"✅ وجدت {len(matched_entries)} صورة لك من العرس 🎉 — جاري الإرسال..."
-        )
-        print(f"[REPLY] Sent summary to {sender}", flush=True)
-    except Exception as e:
-        print(f"[REPLY] ERROR sending summary to {sender}: {e}", flush=True)
-
-    # Download and send first 10 photos as images, rest as Drive links
-    sent = 0
     uid  = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:8]
+    sent = 0
     for i, (file_id, entry) in enumerate(matched_entries):
         try:
-            raw       = download_file(file_id)
-            img_name  = f"qamra_{uid}_{i+1}.jpg"
-            img_path  = os.path.join(MEDIA_DIR, img_name)
-            print(f"[REPLY] Saving photo {i+1} → {img_path}", flush=True)
+            raw      = download_file(file_id)
+            img_name = f"qamra_{uid}_{i+1}.jpg"
+            img_path = os.path.join(MEDIA_DIR, img_name)
             if save_jpeg(raw, img_path):
                 img_url = f"{APP_URL}/media/{img_name}"
                 conf    = entry.get("conf", 0)
-                print(f"[REPLY] Sending photo {i+1} url={img_url}", flush=True)
                 twilio_client.messages.create(
                     from_=TWILIO_WHATSAPP, to=sender,
                     body=f"📷 صورة {i+1} — تطابق {conf:.0f}%",
                     media_url=[img_url]
                 )
                 sent += 1
-                print(f"[REPLY] OK photo {i+1}/{len(matched_entries)}", flush=True)
-                time.sleep(2)  # keep delivery order
-            else:
-                print(f"[REPLY] save_jpeg returned False for photo {i+1}", flush=True)
+                time.sleep(2)
         except Exception as e:
             print(f"[REPLY] ERROR photo {i+1}: {e}", flush=True)
 
-    # Create personal folder with shortcuts to all matched photos and send link
+    # Personal folder with all photos
     try:
-        all_file_ids = [fid for fid, _ in matched_entries]
-        folder_link = create_guest_folder(sender, all_file_ids)
+        phone_label = sender.replace("whatsapp:", "").replace("+", "")
+        folder_link = create_guest_folder(phone_label, [fid for fid, _ in matched_entries], event["name"])
         time.sleep(2)
         twilio_client.messages.create(
             from_=TWILIO_WHATSAPP, to=sender,
             body=f"📂 جميع صورك ({len(matched_entries)} صورة) في مجلد خاص بك:\n\n{folder_link}"
         )
     except Exception as e:
-        print(f"[REPLY] ERROR creating guest folder: {e}", flush=True)
+        print(f"[REPLY] ERROR folder: {e}", flush=True)
 
-    time.sleep(3)  # wait for all photos to deliver before closing message
+    time.sleep(3)
 
-    if sent == 0:
-        try:
-            twilio_client.messages.create(
-                from_=TWILIO_WHATSAPP, to=sender,
-                body="⚠️ فيه خطأ في إرسال الصور، جرب مرة ثانية."
-            )
-        except Exception as e:
-            print(f"[REPLY] ERROR sending fallback: {e}", flush=True)
+    if sent > 0:
+        twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP, to=sender,
+            body="شكراً لاستخدامك قمرة 🌙\nنتمنى أن الصور عجبتك وخلّت الذكرى تدوم ✨\ننتظرك معنا في المرة الجاية 🎉"
+        )
     else:
-        try:
-            twilio_client.messages.create(
-                from_=TWILIO_WHATSAPP, to=sender,
-                body="شكراً لاستخدامك قمرة 🌙\n\nنتمنى أن الصور عجبتك وخلّت الذكرى تدوم ✨\n\ننتظرك معنا في المرة الجاية 🎉"
-            )
-        except Exception as e:
-            print(f"[REPLY] ERROR sending closing: {e}", flush=True)
+        twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP, to=sender,
+            body="⚠️ فيه خطأ في إرسال الصور، جرب مرة ثانية."
+        )
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
-    state = load_state()
-    return f"قمرة 🌙 — running | {len(state.get('indexed_ids', []))} photos indexed", 200
-
-@app.route("/debug", methods=["GET"])
-def debug():
-    state = load_state()
-    return {
-        "photos_indexed": len(state.get("indexed_ids", [])),
-        "env": {k: bool(os.environ.get(k)) for k in
-                ["TWILIO_SID","TWILIO_TOKEN","TWILIO_WHATSAPP",
-                 "AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY",
-                 "GDRIVE_FOLDER_ID","GOOGLE_CREDENTIALS"]},
-        "gdrive_folder": os.environ.get("GDRIVE_FOLDER_ID",""),
-        "collection_id": COLLECTION_ID,
-        "aws_region": AWS_REGION,
-        "app_url": APP_URL,
-    }, 200
-
-@app.route("/test-rekognition", methods=["GET"])
-def test_rekognition():
-    try:
-        ensure_collection()
-        photos = list_drive_photos()
-        if not photos:
-            return {"error": "no photos in drive"}, 200
-        img = download_file(photos[0]["id"])
-        img = resize_for_rekognition(img)
-        resp = rek.detect_faces(Image={"Bytes": img}, Attributes=["DEFAULT"])
-        return {
-            "photo": photos[0]["name"],
-            "faces_detected": len(resp.get("FaceDetails", [])),
-            "collection": COLLECTION_ID,
-            "region": AWS_REGION,
-        }, 200
-    except Exception as e:
-        return {"error": str(e)}, 200
+    summary = {code: len(load_state(code).get("indexed_ids", [])) for code in _events}
+    lines   = [f"قمرة 🌙 — {len(_events)} events"] + [f"  {k}: {v} photos" for k, v in summary.items()]
+    return "\n".join(lines), 200
 
 @app.route("/media/<filename>", methods=["GET"])
 def serve_media(filename):
     filepath = os.path.join(MEDIA_DIR, filename)
     if not os.path.exists(filepath):
         return "Not found", 404
-    if filename.endswith(".jpg") or filename.endswith(".jpeg"):
-        return send_file(filepath, mimetype="image/jpeg")
-    if filename.endswith(".png"):
-        return send_file(filepath, mimetype="image/png")
-    return "Not found", 404
-
-@app.route("/index", methods=["POST"])
-def index_photos():
-    threading.Thread(target=run_index, daemon=True).start()
-    return {"status": "indexing started"}, 202
-
-@app.route("/match", methods=["POST"])
-def match_api():
-    """
-    POST a selfie → returns matches instantly (no Drive download).
-    Photo URLs point to /photo/<file_id> which streams on demand.
-    """
-    selfie_bytes = None
-
-    phone = request.form.get("phone", "").strip()
-    if "photo" in request.files:
-        selfie_bytes = request.files["photo"].read()
-    elif request.is_json and request.json.get("image_url"):
-        try:
-            r = requests.get(request.json["image_url"], timeout=15)
-            if r.status_code == 200:
-                selfie_bytes = r.content
-        except Exception as e:
-            return {"error": f"Could not fetch image: {e}"}, 400
-
-    if not selfie_bytes:
-        return {"error": "Send a photo via 'photo' file field or 'image_url' JSON field"}, 400
-
-    state    = load_state()
-    file_map = state.get("file_map", {})
-
-    if not state.get("indexed_ids"):
-        return {"error": "Photos not indexed yet, try again in a few minutes"}, 503
-
-    matches = search_by_selfie(selfie_bytes)
-    if not matches:
-        return {"matches": [], "message": "No face found or no matches"}, 200
-
-    # Build results immediately — no Drive download, no folder creation
-    seen, results, file_ids = set(), [], []
-    for m in matches:
-        file_id = m["Face"]["ExternalImageId"]
-        conf    = m["Similarity"]
-        if file_id in seen:
-            continue
-        seen.add(file_id)
-        file_ids.append(file_id)
-        entry = file_map.get(file_id, {})
-        results.append({
-            "url":        f"{APP_URL}/photo/{file_id}",
-            "confidence": round(conf, 1),
-            "name":       entry.get("name", ""),
-            "drive_link": entry.get("link", ""),
-        })
-
-    # Create folder entirely in background — kiosk polls /folder-status/<session_id>
-    session_id = hashlib.md5(f"{time.time()}{phone}".encode()).hexdigest()[:16]
-    _folder_cache[session_id] = None  # None = in progress
-
-    def _build_folder(sid, fid_list, ph):
-        try:
-            svc = _drive(write=True)
-            name = f"صورك من الحفل 🌙 — {ph}" if ph else "صورك من الحفل 🌙"
-            folder = svc.files().create(body={
-                "name": name,
-                "mimeType": "application/vnd.google-apps.folder",
-            }, fields="id").execute()
-            fid = folder["id"]
-            svc.permissions().create(fileId=fid, body={"type": "anyone", "role": "reader"}).execute()
-            for file_id in fid_list:
-                try:
-                    svc.files().create(body={
-                        "name": file_id,
-                        "mimeType": "application/vnd.google-apps.shortcut",
-                        "shortcutDetails": {"targetId": file_id},
-                        "parents": [fid],
-                    }, fields="id").execute()
-                except Exception as e:
-                    print(f"[FOLDER] shortcut error: {e}", flush=True)
-            _folder_cache[sid] = f"https://drive.google.com/drive/folders/{fid}"
-            print(f"[FOLDER] Ready: {_folder_cache[sid]}", flush=True)
-        except Exception as e:
-            _folder_cache[sid] = ""
-            print(f"[FOLDER] Error: {e}", flush=True)
-
-    threading.Thread(target=_build_folder, args=(session_id, file_ids, phone), daemon=True).start()
-
-    return {"matches": results, "session_id": session_id}, 200
+    mime = "image/jpeg" if filename.endswith((".jpg", ".jpeg")) else "image/png"
+    return send_file(filepath, mimetype=mime)
 
 @app.route("/photo/<file_id>", methods=["GET"])
 def serve_photo(file_id):
-    """Stream a Drive photo on demand (called by browser when loading each thumbnail)."""
-    # Basic validation
     if not all(c.isalnum() or c in "-_" for c in file_id):
         return "invalid id", 400
     cached = os.path.join(MEDIA_DIR, f"cache_{file_id}.jpg")
@@ -564,37 +487,169 @@ def serve_photo(file_id):
 
 @app.route("/folder-status/<session_id>", methods=["GET"])
 def folder_status(session_id):
-    """Kiosk polls this until folder_url is ready."""
     if session_id not in _folder_cache:
-        return {"status": "not_found"}, 404
+        return jsonify({"status": "not_found"}), 404
     url = _folder_cache[session_id]
     if url is None:
-        return {"status": "building"}, 202
-    return {"status": "ready", "folder_url": url}, 200
+        return jsonify({"status": "building"}), 202
+    return jsonify({"status": "ready", "folder_url": url}), 200
 
+@app.route("/match", methods=["POST"])
+def match_api():
+    """Kiosk face search — returns results instantly, folder built in background."""
+    event_code = request.form.get("event_code", "").upper().strip()
+    phone      = request.form.get("phone", "").strip()
+    event      = get_event(event_code)
+    if not event:
+        return jsonify({"error": f"Unknown event: {event_code}. Register it first via /admin/event"}), 404
+
+    selfie_bytes = None
+    if "photo" in request.files:
+        selfie_bytes = request.files["photo"].read()
+    elif request.is_json and request.json.get("image_url"):
+        try:
+            r = requests.get(request.json["image_url"], timeout=15)
+            if r.status_code == 200:
+                selfie_bytes = r.content
+        except Exception as e:
+            return jsonify({"error": f"Could not fetch image: {e}"}), 400
+
+    if not selfie_bytes:
+        return jsonify({"error": "Send photo via 'photo' field"}), 400
+
+    state    = load_state(event_code)
+    file_map = state.get("file_map", {})
+    if not state.get("indexed_ids"):
+        return jsonify({"error": "Photos not indexed yet — call /index first"}), 503
+
+    matches = search_by_selfie(selfie_bytes, event["collection_id"])
+    if not matches:
+        return jsonify({"matches": [], "message": "No face found or no matches"}), 200
+
+    seen, results, file_ids = set(), [], []
+    for m in matches:
+        file_id = m["Face"]["ExternalImageId"]
+        conf    = m["Similarity"]
+        if file_id in seen:
+            continue
+        seen.add(file_id)
+        file_ids.append(file_id)
+        entry = file_map.get(file_id, {})
+        results.append({
+            "url":        f"{APP_URL}/photo/{file_id}",
+            "confidence": round(conf, 1),
+            "name":       entry.get("name", ""),
+            "drive_link": entry.get("link", ""),
+        })
+
+    # Build personal folder in background
+    session_id = hashlib.md5(f"{time.time()}{phone}".encode()).hexdigest()[:16]
+    _folder_cache[session_id] = None
+
+    def _build_folder(sid, fid_list, ph, evt):
+        try:
+            label = ph.replace("+", "") if ph else sid[:8]
+            url   = create_guest_folder(label, fid_list, evt["name"])
+            _folder_cache[sid] = url
+        except Exception as e:
+            _folder_cache[sid] = ""
+            print(f"[FOLDER] Error: {e}", flush=True)
+
+    threading.Thread(target=_build_folder, args=(session_id, file_ids, phone, event), daemon=True).start()
+
+    return jsonify({"matches": results, "session_id": session_id}), 200
+
+@app.route("/index", methods=["POST"])
+def index_photos():
+    event_code = request.args.get("event", "").upper().strip()
+    if not event_code or not get_event(event_code):
+        return jsonify({"error": f"Unknown event '{event_code}'. Register first via /admin/event"}), 404
+    threading.Thread(target=run_index, args=(event_code,), daemon=True).start()
+    return jsonify({"status": "indexing started", "event": event_code}), 202
+
+# ── Admin endpoints ───────────────────────────────────────────────────────────
+def _check_admin():
+    token = request.headers.get("X-Admin-Token") or request.args.get("token")
+    return token == ADMIN_TOKEN
+
+@app.route("/admin/events", methods=["GET"])
+def admin_list_events():
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    result = {}
+    for code, ev in _events.items():
+        state = load_state(code)
+        result[code] = {**ev, "indexed_photos": len(state.get("indexed_ids", []))}
+    return jsonify(result), 200
+
+@app.route("/admin/event", methods=["POST"])
+def admin_add_event():
+    """
+    Register a new wedding event.
+    POST JSON: { "code": "AHMED2026", "name": "حفل أحمد", "collection_id": "qamra-ahmed2026", "gdrive_folder_id": "1ABC..." }
+    Header: X-Admin-Token: <token>
+    """
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.json or {}
+    code = data.get("code", "").upper().strip()
+    if not code:
+        return jsonify({"error": "code is required"}), 400
+    if not data.get("name") or not data.get("collection_id") or not data.get("gdrive_folder_id"):
+        return jsonify({"error": "name, collection_id, gdrive_folder_id are required"}), 400
+
+    with _events_lock:
+        _events[code] = {
+            "name":             data["name"],
+            "collection_id":    data["collection_id"],
+            "gdrive_folder_id": data["gdrive_folder_id"],
+        }
+        save_events()
+
+    # Start indexing in background
+    threading.Thread(target=run_index, args=(code,), daemon=True).start()
+
+    return jsonify({"status": "created", "event": code, "indexing": "started"}), 201
+
+@app.route("/admin/event/<code>", methods=["DELETE"])
+def admin_delete_event(code):
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    code = code.upper()
+    with _events_lock:
+        if code not in _events:
+            return jsonify({"error": "Not found"}), 404
+        del _events[code]
+        save_events()
+    return jsonify({"status": "deleted", "event": code}), 200
+
+# ── WhatsApp webhook ──────────────────────────────────────────────────────────
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     num_media = int(request.form.get("NumMedia", 0))
     sender    = request.form.get("From", "")
     body_text = request.form.get("Body", "").strip()
-    state     = _get_state(sender)
+    conv      = _get_conv(sender)
+    state     = conv["state"]
     resp      = MessagingResponse()
     msg       = resp.message()
 
-    # ── Image received → always run face search ───────────────────────────────
+    # ── Selfie received ───────────────────────────────────────────────────────
     if num_media > 0:
         media_url = request.form.get("MediaUrl0")
         if not media_url:
             msg.body("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
             return str(resp)
 
-        print(f"[WEBHOOK] From={sender} MediaUrl={media_url[:80]}", flush=True)
+        event_code = conv.get("event_code")
+        if not event_code or not get_event(event_code):
+            msg.body("⚠️ ما عندك حفل محدد. امسح QR الكود من الحفل أو أرسل كود الحفل أولاً.")
+            return str(resp)
 
         selfie_bytes = None
         for auth in [None, (TWILIO_SID, TWILIO_TOKEN)]:
             try:
                 r = requests.get(media_url, auth=auth, timeout=20, allow_redirects=True)
-                print(f"[DOWNLOAD] status={r.status_code} auth={'yes' if auth else 'no'} size={len(r.content)}", flush=True)
                 if r.status_code == 200:
                     selfie_bytes = r.content
                     break
@@ -605,33 +660,48 @@ def whatsapp_webhook():
             msg.body("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
             return str(resp)
 
-        _clear_state(sender)
+        _clear_conv(sender)
         app_ctx = app.app_context()
 
         def run():
             app_ctx.push()
             try:
-                search_and_send(selfie_bytes, sender)
+                search_and_send(selfie_bytes, sender, event_code)
             except Exception as e:
                 print(f"[ERROR] {e}", flush=True)
                 try:
-                    twilio_client.messages.create(
-                        from_=TWILIO_WHATSAPP, to=sender, body=f"⚠️ {str(e)}"
-                    )
+                    twilio_client.messages.create(from_=TWILIO_WHATSAPP, to=sender, body=f"⚠️ {str(e)}")
                 except Exception:
                     pass
             finally:
                 app_ctx.pop()
 
         threading.Thread(target=run, daemon=True).start()
-        msg.body("🔍 جاري البحث عن صورك... سأرسل لك النتيجة خلال ثوانٍ ⏳")
+        event_name = get_event(event_code)["name"]
+        msg.body(f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳")
         return str(resp)
 
     # ── Text received ─────────────────────────────────────────────────────────
+    upper = body_text.upper().strip()
 
-    # Step 1: new user → ask routing question
-    if state == "new":
-        _set_state(sender, "routing")
+    # Check if the text is a registered event code
+    if upper in _events:
+        event = _events[upper]
+        _set_conv(sender, "awaiting_selfie", event_code=upper)
+        msg.body(
+            f"🌙 أهلاً بك في *{event['name']}*!\n\n"
+            "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من الحفل 🎉📸"
+        )
+        return str(resp)
+
+    # Reset keywords
+    if any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start", "مرحبا")):
+        _clear_conv(sender)
+        _set_conv(sender, "routing")
+
+    # New user or reset
+    if state in ("new", "routing") and upper not in _events:
+        _set_conv(sender, "routing")
         msg.body(
             "🌙 أهلاً وسهلاً!\n\n"
             "كيف أقدر أساعدك؟\n\n"
@@ -640,52 +710,53 @@ def whatsapp_webhook():
         )
         return str(resp)
 
-    # Step 2: waiting for 1 or 2
     if state == "routing":
         if body_text in ("1", "١") or any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل")):
-            _set_state(sender, "awaiting_selfie")
+            _set_conv(sender, "awaiting_event_code")
+            codes = ", ".join(_events.keys()) if _events else "(لا يوجد أحداث مسجلة)"
             msg.body(
                 "✨ ممتاز!\n\n"
-                "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من العرس خلال ثوانٍ 🎉"
+                f"أرسل لي *كود الحفل* — ستجده على QR الكود في الحفل.\n\n"
+                f"الأحداث المتاحة: {codes}"
             )
-        elif body_text in ("2", "٢") or any(w in body_text for w in ("استفسار", "سؤال", "تواصل")):
-            _set_state(sender, "awaiting_inquiry")
+        elif body_text in ("2", "٢") or any(w in body_text for w in ("استفسار", "سؤال")):
+            _set_conv(sender, "awaiting_inquiry")
             msg.body("بكل سرور! اكتب استفسارك وسأوصله لفريقنا 💬")
         else:
-            msg.body(
-                "من فضلك رد بـ *1* أو *2*:\n\n"
-                "*1* — ضيف يبحث عن صوره من الحفل 📸\n"
-                "*2* — استفسار عام 💬"
-            )
+            msg.body("من فضلك رد بـ *1* أو *2*.")
         return str(resp)
 
-    # Step 3a: guest told to send selfie but sent text instead
+    if state == "awaiting_event_code":
+        msg.body(
+            f"⚠️ الكود '{body_text}' غير موجود.\n\n"
+            "تأكد من الكود وحاول مرة ثانية، أو امسح QR الكود من الحفل مباشرة."
+        )
+        return str(resp)
+
     if state == "awaiting_selfie":
-        msg.body("📸 أرسل لي *سيلفي* لوجهك وسأجد صورك!\n\nللبداية من جديد اكتب *مرحبا*")
+        event_name = get_event(conv.get("event_code", ""))
+        name = event_name["name"] if event_name else "الحفل"
+        msg.body(f"📸 أرسل لي *سيلفي* لوجهك وسأجد صورك من {name}!")
         return str(resp)
 
-    # Step 3b: inquiry text received → forward to owner
     if state == "awaiting_inquiry":
-        _clear_state(sender)
+        _clear_conv(sender)
         msg.body("شكراً! تم إيصال استفسارك وسيتواصل معك فريقنا قريباً 🌙")
         try:
             twilio_client.messages.create(
-                from_=TWILIO_WHATSAPP,
-                to=OWNER_WHATSAPP,
+                from_=TWILIO_WHATSAPP, to=OWNER_WHATSAPP,
                 body=f"📩 استفسار جديد\nمن: {sender.replace('whatsapp:', '')}\n\n{body_text}"
             )
-            print(f"[INQUIRY] Forwarded from {sender}", flush=True)
         except Exception as e:
             print(f"[INQUIRY] Forward error: {e}", flush=True)
         return str(resp)
 
-    # Fallback / reset on "مرحبا" or anything unexpected
-    _set_state(sender, "routing")
+    # Fallback
+    _set_conv(sender, "routing")
     msg.body(
         "🌙 أهلاً وسهلاً!\n\n"
-        "كيف أقدر أساعدك؟\n\n"
-        "رد بـ *1* — إذا كنت ضيفاً تبحث عن صورك من الحفل 📸\n"
-        "رد بـ *2* — إذا لديك استفسار عام 💬"
+        "رد بـ *1* — تبحث عن صورك 📸\n"
+        "رد بـ *2* — استفسار عام 💬"
     )
     return str(resp)
 
