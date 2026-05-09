@@ -196,7 +196,7 @@ def search_by_selfie(selfie_bytes):
         resp    = rek.search_faces_by_image(
             CollectionId=COLLECTION_ID,
             Image={"Bytes": selfie_bytes},
-            MaxFaces=30,
+            MaxFaces=4096,
             FaceMatchThreshold=MATCH_CONF,
         )
         matches = resp.get("FaceMatches", [])
@@ -349,7 +349,7 @@ def search_and_send(selfie_bytes, sender):
     # Download and send first 10 photos as images, rest as Drive links
     sent = 0
     uid  = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:8]
-    for i, (file_id, entry) in enumerate(matched_entries[:10]):
+    for i, (file_id, entry) in enumerate(matched_entries[:30]):
         try:
             raw       = download_file(file_id)
             img_name  = f"qamra_{uid}_{i+1}.jpg"
@@ -505,7 +505,7 @@ def match_api():
             "name":       entry.get("name", ""),
             "drive_link": entry.get("link", ""),
         })
-        if len(results) >= 30:
+        if len(results) >= 4096:
             break
 
     return {"matches": results}, 200
