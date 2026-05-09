@@ -37,6 +37,8 @@ OWNER_WHATSAPP   = "whatsapp:+97470263297"
 
 # In-memory conversation state per user: phone -> {"state": str, "ts": float}
 _conv = {}
+# Kiosk folder cache: session_id -> folder_url (None = building, "" = failed)
+_folder_cache = {}
 _CONV_TTL = 3600  # 1 hour
 
 def _get_state(phone):
@@ -491,7 +493,7 @@ def match_api():
     if not matches:
         return {"matches": [], "message": "No face found or no matches"}, 200
 
-    # Build results immediately — no Drive download
+    # Build results immediately — no Drive download, no folder creation
     seen, results, file_ids = set(), [], []
     for m in matches:
         file_id = m["Face"]["ExternalImageId"]
@@ -508,42 +510,39 @@ def match_api():
             "drive_link": entry.get("link", ""),
         })
 
-    # Create personal Drive folder instantly, add shortcuts in background
-    folder_url = ""
-    try:
-        svc = _drive(write=True)
-        folder_name = f"صورك من الحفل 🌙 — {phone}" if phone else "صورك من الحفل 🌙"
-        folder = svc.files().create(body={
-            "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder",
-        }, fields="id").execute()
-        folder_id = folder["id"]
-        svc.permissions().create(
-            fileId=folder_id,
-            body={"type": "anyone", "role": "reader"},
-        ).execute()
-        folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+    # Create folder entirely in background — kiosk polls /folder-status/<session_id>
+    session_id = hashlib.md5(f"{time.time()}{phone}".encode()).hexdigest()[:16]
+    _folder_cache[session_id] = None  # None = in progress
 
-        # Add shortcuts in background so we return immediately
-        def _add_shortcuts(fid_list, fold_id):
-            s = _drive(write=True)
-            for fid in fid_list:
+    def _build_folder(sid, fid_list, ph):
+        try:
+            svc = _drive(write=True)
+            name = f"صورك من الحفل 🌙 — {ph}" if ph else "صورك من الحفل 🌙"
+            folder = svc.files().create(body={
+                "name": name,
+                "mimeType": "application/vnd.google-apps.folder",
+            }, fields="id").execute()
+            fid = folder["id"]
+            svc.permissions().create(fileId=fid, body={"type": "anyone", "role": "reader"}).execute()
+            for file_id in fid_list:
                 try:
-                    s.files().create(body={
-                        "name": fid,
+                    svc.files().create(body={
+                        "name": file_id,
                         "mimeType": "application/vnd.google-apps.shortcut",
-                        "shortcutDetails": {"targetId": fid},
-                        "parents": [fold_id],
+                        "shortcutDetails": {"targetId": file_id},
+                        "parents": [fid],
                     }, fields="id").execute()
                 except Exception as e:
-                    print(f"[FOLDER] shortcut error {fid}: {e}", flush=True)
+                    print(f"[FOLDER] shortcut error: {e}", flush=True)
+            _folder_cache[sid] = f"https://drive.google.com/drive/folders/{fid}"
+            print(f"[FOLDER] Ready: {_folder_cache[sid]}", flush=True)
+        except Exception as e:
+            _folder_cache[sid] = ""
+            print(f"[FOLDER] Error: {e}", flush=True)
 
-        threading.Thread(target=_add_shortcuts, args=(file_ids, folder_id), daemon=True).start()
-        print(f"[FOLDER] Created kiosk folder: {folder_url}", flush=True)
-    except Exception as e:
-        print(f"[FOLDER] Error creating folder: {e}", flush=True)
+    threading.Thread(target=_build_folder, args=(session_id, file_ids, phone), daemon=True).start()
 
-    return {"matches": results, "folder_url": folder_url}, 200
+    return {"matches": results, "session_id": session_id}, 200
 
 @app.route("/photo/<file_id>", methods=["GET"])
 def serve_photo(file_id):
@@ -562,6 +561,16 @@ def serve_photo(file_id):
     except Exception as e:
         print(f"[PHOTO] Error {file_id}: {e}", flush=True)
         return str(e), 500
+
+@app.route("/folder-status/<session_id>", methods=["GET"])
+def folder_status(session_id):
+    """Kiosk polls this until folder_url is ready."""
+    if session_id not in _folder_cache:
+        return {"status": "not_found"}, 404
+    url = _folder_cache[session_id]
+    if url is None:
+        return {"status": "building"}, 202
+    return {"status": "ready", "folder_url": url}, 200
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
