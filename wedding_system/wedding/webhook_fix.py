@@ -398,7 +398,7 @@ def _auto_index_loop():
                 run_index(code)
             except Exception as e:
                 print(f"[AUTO-INDEX] {code} error: {e}", flush=True)
-        time.sleep(120)  # re-check every 2 minutes
+        time.sleep(30)  # re-check every 30 seconds for live events
 
 threading.Thread(target=_auto_index_loop, daemon=True).start()
 
