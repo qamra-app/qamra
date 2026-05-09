@@ -462,18 +462,13 @@ def index_photos():
 @app.route("/match", methods=["POST"])
 def match_api():
     """
-    POST a selfie, get back matching wedding photos as JSON.
-    Accepts: multipart/form-data with field 'photo' (file upload)
-          OR application/json with field 'image_url' (public URL)
-    Returns: { "matches": [ { "url": "...", "confidence": 95.2, "name": "..." } ] }
+    POST a selfie → returns matches instantly (no Drive download).
+    Photo URLs point to /photo/<file_id> which streams on demand.
     """
     selfie_bytes = None
 
-    # Accept file upload
     if "photo" in request.files:
         selfie_bytes = request.files["photo"].read()
-
-    # Accept URL
     elif request.is_json and request.json.get("image_url"):
         try:
             r = requests.get(request.json["image_url"], timeout=15)
@@ -495,35 +490,43 @@ def match_api():
     if not matches:
         return {"matches": [], "message": "No face found or no matches"}, 200
 
-    # Deduplicate and build response
+    # Return results immediately — no Drive download
     seen, results = set(), []
-    uid = hashlib.md5(f"{time.time()}".encode()).hexdigest()[:8]
-
     for m in matches:
         file_id = m["Face"]["ExternalImageId"]
         conf    = m["Similarity"]
         if file_id in seen:
             continue
         seen.add(file_id)
-        entry    = file_map.get(file_id, {})
-        img_name = f"qamra_{uid}_{len(results)+1}.jpg"
-        img_path = os.path.join(MEDIA_DIR, img_name)
-        try:
-            raw = download_file(file_id)
-            if save_jpeg(raw, img_path):
-                results.append({
-                    "url":        f"{APP_URL}/media/{img_name}",
-                    "confidence": round(conf, 1),
-                    "name":       entry.get("name", ""),
-                    "drive_link": entry.get("link", ""),
-                })
-        except Exception as e:
-            print(f"[MATCH-API] Error downloading {file_id}: {e}", flush=True)
-
-        if len(results) >= 20:
+        entry = file_map.get(file_id, {})
+        results.append({
+            "url":        f"{APP_URL}/photo/{file_id}",
+            "confidence": round(conf, 1),
+            "name":       entry.get("name", ""),
+            "drive_link": entry.get("link", ""),
+        })
+        if len(results) >= 30:
             break
 
     return {"matches": results}, 200
+
+@app.route("/photo/<file_id>", methods=["GET"])
+def serve_photo(file_id):
+    """Stream a Drive photo on demand (called by browser when loading each thumbnail)."""
+    # Basic validation
+    if not all(c.isalnum() or c in "-_" for c in file_id):
+        return "invalid id", 400
+    cached = os.path.join(MEDIA_DIR, f"cache_{file_id}.jpg")
+    if os.path.exists(cached):
+        return send_file(cached, mimetype="image/jpeg")
+    try:
+        raw = download_file(file_id)
+        if save_jpeg(raw, cached):
+            return send_file(cached, mimetype="image/jpeg")
+        return "download failed", 500
+    except Exception as e:
+        print(f"[PHOTO] Error {file_id}: {e}", flush=True)
+        return str(e), 500
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
