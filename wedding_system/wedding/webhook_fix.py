@@ -687,7 +687,7 @@ document.getElementById('addForm').addEventListener('submit', async e => {{
   }}
 }});
 </script>
-</body></html>""", 200, {{"Content-Type": "text/html; charset=utf-8"}}
+</body></html>""", 200, {"Content-Type": "text/html; charset=utf-8"}
 
 @app.route("/admin/events", methods=["GET"])
 def admin_list_events():
