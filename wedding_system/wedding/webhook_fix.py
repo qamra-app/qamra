@@ -669,14 +669,19 @@ input:focus{{border-color:#C9A96E}}
     </div>
     <div class="form-row">
       <div><label>Rekognition Collection ID</label><input name="collection_id" placeholder="qamra-ahmed2026" required></div>
-      <div><label>Google Drive Folder ID</label><input name="gdrive_folder_id" placeholder="1ABC..." required></div>
+      <div>
+        <label>مجلد Google Drive <span id="folderLoading" style="color:#C9A96E;font-size:11px">⏳ جاري التحميل...</span></label>
+        <select name="gdrive_folder_id" id="folderSelect" required style="width:100%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 14px;color:#FAF6EC;font-size:14px;outline:none">
+          <option value="">-- اختر المجلد --</option>
+        </select>
+      </div>
     </div>
     <div class="form-row">
       <div><label>تاريخ الحفل</label><input name="date" type="date" required></div>
-      <div><label>رابط ألبوم Drive العام (اختياري)</label><input name="drive_url" placeholder="https://drive.google.com/drive/folders/..."></div>
+      <div><label>رابط ألبوم Drive العام (اختياري)</label><input name="drive_url" id="driveUrl" placeholder="سيُملأ تلقائياً عند اختيار المجلد"></div>
     </div>
     <div class="form-row full">
-      <div><label>رابط الكشك (اختياري — عنوان IP المحلي)</label><input name="kiosk_url" placeholder="http://192.168.1.10:5000?event=AHMED2026"></div>
+      <div><label>رابط الكشك (اختياري)</label><input name="kiosk_url" placeholder="http://192.168.1.10:5000?event=AHMED2026"></div>
     </div>
     <button type="submit" class="btn">إضافة الحفل وبدء الفهرسة ＋</button>
     <div class="success" id="successMsg">✅ تمت الإضافة! جاري الفهرسة في الخلفية.</div>
@@ -684,6 +689,28 @@ input:focus{{border-color:#C9A96E}}
 </div>
 
 <script>
+// Load Drive folders
+(async () => {{
+  try {{
+    const r = await fetch('/admin/drive-folders?token={token}');
+    const folders = await r.json();
+    const sel = document.getElementById('folderSelect');
+    document.getElementById('folderLoading').textContent = '';
+    folders.forEach(f => {{
+      const opt = document.createElement('option');
+      opt.value = f.id;
+      opt.textContent = f.name;
+      sel.appendChild(opt);
+    }});
+    sel.addEventListener('change', () => {{
+      const fid = sel.value;
+      if (fid) document.getElementById('driveUrl').value = 'https://drive.google.com/drive/folders/' + fid;
+    }});
+  }} catch(e) {{
+    document.getElementById('folderLoading').textContent = '(تعذر التحميل)';
+  }}
+}})();
+
 document.getElementById('addForm').addEventListener('submit', async e => {{
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -704,6 +731,23 @@ document.getElementById('addForm').addEventListener('submit', async e => {{
 }});
 </script>
 </body></html>""", 200, {"Content-Type": "text/html; charset=utf-8"}
+
+@app.route("/admin/drive-folders", methods=["GET"])
+def admin_drive_folders():
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        svc  = _drive()
+        resp = svc.files().list(
+            q="mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="files(id, name)",
+            orderBy="name",
+            pageSize=100,
+        ).execute()
+        folders = [{"id": f["id"], "name": f["name"]} for f in resp.get("files", [])]
+        return jsonify(folders), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/admin/events", methods=["GET"])
 def admin_list_events():
