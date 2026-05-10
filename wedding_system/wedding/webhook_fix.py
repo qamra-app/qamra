@@ -9,8 +9,6 @@ import requests
 import boto3
 from botocore.exceptions import ClientError
 from flask import Flask, request, send_file, jsonify
-from twilio.twiml.messaging_response import MessagingResponse
-from twilio.rest import Client
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -19,16 +17,31 @@ from PIL import Image, ImageOps
 app = Flask(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-TWILIO_SID              = os.environ["TWILIO_SID"]
-TWILIO_TOKEN            = os.environ["TWILIO_TOKEN"]
-TWILIO_WHATSAPP         = os.environ["TWILIO_WHATSAPP"]
+# Set MESSAGING_PROVIDER=twilio to roll back to Twilio at any time
+MESSAGING_PROVIDER = os.environ.get("MESSAGING_PROVIDER", "wassenger")
+
+WASSENGER_API_KEY  = os.environ.get("WASSENGER_API_KEY", "")
+WASSENGER_API_URL  = "https://api.wassenger.com/v1/messages"
+
+# Twilio — kept for rollback (set MESSAGING_PROVIDER=twilio to re-enable)
+TWILIO_SID      = os.environ.get("TWILIO_SID", "")
+TWILIO_TOKEN    = os.environ.get("TWILIO_TOKEN", "")
+TWILIO_WHATSAPP = os.environ.get("TWILIO_WHATSAPP", "whatsapp:+97470263297")
+
+twilio_client = None
+if TWILIO_SID and TWILIO_TOKEN:
+    from twilio.rest import Client
+    from twilio.twiml.messaging_response import MessagingResponse
+    twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
+
 AWS_ACCESS_KEY_ID       = os.environ["AWS_ACCESS_KEY_ID"]
 AWS_SECRET_ACCESS_KEY   = os.environ["AWS_SECRET_ACCESS_KEY"]
 AWS_REGION              = os.environ.get("AWS_REGION", "us-east-1")
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 APP_URL                 = os.environ.get("APP_URL", "https://qamra-production.up.railway.app")
 ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "qamra-admin-2026")
-OWNER_WHATSAPP          = "whatsapp:+97470263297"
+OWNER_WHATSAPP          = os.environ.get("OWNER_WHATSAPP", "whatsapp:+97470263297")
+OWNER_PHONE             = OWNER_WHATSAPP.replace("whatsapp:", "").replace("+", "")
 
 MATCH_CONF  = 80
 MEDIA_DIR   = "/tmp/qamra_media"
@@ -36,7 +49,27 @@ EVENTS_FILE = "/tmp/qamra_events.json"   # ephemeral; backed up to Drive
 EVENTS_DRIVE_NAME = "_qamra_events_.json"
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
-twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
+
+# ── Unified message sender ────────────────────────────────────────────────────
+def send_msg(to, body, media_url=None):
+    """Send a WhatsApp message via Wassenger or Twilio depending on MESSAGING_PROVIDER."""
+    if MESSAGING_PROVIDER == "twilio" and twilio_client:
+        kwargs = {"from_": TWILIO_WHATSAPP, "to": to, "body": body}
+        if media_url:
+            kwargs["media_url"] = [media_url]
+        twilio_client.messages.create(**kwargs)
+    else:
+        payload = {"phone": to, "message": body}
+        if media_url:
+            payload["media"] = {"url": media_url}
+        try:
+            r = requests.post(WASSENGER_API_URL, json=payload,
+                              headers={"Authorization": WASSENGER_API_KEY,
+                                       "Content-Type": "application/json"},
+                              timeout=20)
+            r.raise_for_status()
+        except Exception as e:
+            print(f"[WASSENGER] Send error to {to}: {e}", flush=True)
 
 rek = boto3.client(
     "rekognition",
@@ -446,28 +479,19 @@ def create_guest_folder(sender_label, file_ids, event_name):
 def search_and_send(selfie_bytes, sender, event_code):
     event    = get_event(event_code)
     if not event:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body="⚠️ الحفل غير موجود. تأكد من الكود وحاول مرة ثانية."
-        )
+        send_msg(sender, "⚠️ الحفل غير موجود. تأكد من الكود وحاول مرة ثانية.")
         return
 
     state    = load_state(event_code)
     file_map = state.get("file_map", {})
 
     if not state.get("indexed_ids"):
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body="⏳ الصور لم تُفهرس بعد — تواصل مع المنظم"
-        )
+        send_msg(sender, "⏳ الصور لم تُفهرس بعد — تواصل مع المنظم")
         return
 
     matches = search_by_selfie(selfie_bytes, event["collection_id"])
     if not matches:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body="😕 ما لقيت وجه في الصورة أو ما لقيت صورك — أرسل سيلفي واضح وحاول مرة ثانية"
-        )
+        send_msg(sender, "😕 ما لقيت وجه في الصورة أو ما لقيت صورك — أرسل سيلفي واضح وحاول مرة ثانية")
         return
 
     seen_ids, file_ids = set(), []
@@ -480,10 +504,7 @@ def search_and_send(selfie_bytes, sender, event_code):
     count    = len(file_ids)
     PREVIEW  = 10  # photos sent directly, rest via Drive folder
 
-    twilio_client.messages.create(
-        from_=TWILIO_WHATSAPP, to=sender,
-        body=f"✅ وجدت {count} صورة لك من {event['name']} 🎉 — جاري إرسال أول {min(count, PREVIEW)} صور..."
-    )
+    send_msg(sender, f"✅ وجدت {count} صورة لك من {event['name']} 🎉 — جاري إرسال أول {min(count, PREVIEW)} صور...")
 
     uid  = hashlib.md5(f"{sender}{time.time()}".encode()).hexdigest()[:8]
     sent = 0
@@ -493,11 +514,7 @@ def search_and_send(selfie_bytes, sender, event_code):
             img_name = f"qamra_{uid}_{i+1}.jpg"
             img_path = os.path.join(MEDIA_DIR, img_name)
             if save_jpeg(raw, img_path):
-                twilio_client.messages.create(
-                    from_=TWILIO_WHATSAPP, to=sender,
-                    body=f"📷 {i+1}/{min(count, PREVIEW)}",
-                    media_url=[f"{APP_URL}/media/{img_name}"]
-                )
+                send_msg(sender, f"📷 {i+1}/{min(count, PREVIEW)}", media_url=f"{APP_URL}/media/{img_name}")
                 sent += 1
                 time.sleep(1)
         except Exception as e:
@@ -507,21 +524,14 @@ def search_and_send(selfie_bytes, sender, event_code):
     try:
         phone_label = sender.replace("whatsapp:", "").replace("+", "")
         folder_link = create_guest_folder(phone_label, file_ids, event["name"])
-        remaining   = count - sent
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body=(
-                f"📂 جميع صورك ({count} صورة) في مجلدك الخاص:\n\n"
-                f"{folder_link}\n\n"
-                "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
-            )
+        send_msg(sender,
+            f"📂 جميع صورك ({count} صورة) في مجلدك الخاص:\n\n"
+            f"{folder_link}\n\n"
+            "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
         )
     except Exception as e:
         print(f"[REPLY] ERROR folder: {e}", flush=True)
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP, to=sender,
-            body="⚠️ فيه خطأ في إنشاء المجلد، جرب مرة ثانية."
-        )
+        send_msg(sender, "⚠️ فيه خطأ في إنشاء المجلد، جرب مرة ثانية.")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
@@ -878,7 +888,7 @@ def event_landing(code):
     if not event:
         return "حفل غير موجود", 404
 
-    wa_number  = TWILIO_WHATSAPP.replace("whatsapp:", "").replace("+", "")
+    wa_number  = OWNER_PHONE
     wa_link    = f"https://wa.me/{wa_number}?text={code.upper()}"
     drive_url  = event.get("drive_url", "")
     kiosk_url  = event.get("kiosk_url", "")
@@ -966,45 +976,68 @@ def event_landing(code):
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
-    num_media = int(request.form.get("NumMedia", 0))
-    sender    = request.form.get("From", "")
-    body_text = request.form.get("Body", "").strip()
-    conv      = _get_conv(sender)
-    state     = conv["state"]
-    resp      = MessagingResponse()
-    msg       = resp.message()
+    # ── Parse request — supports both Wassenger (JSON) and Twilio (form) ──────
+    if request.is_json:
+        # Wassenger format
+        data      = request.get_json(silent=True) or {}
+        if data.get("event") != "message:in:new":
+            return "", 200
+        msg_data  = data.get("data", {})
+        sender    = msg_data.get("phone", "")
+        body_text = (msg_data.get("body") or "").strip()
+        has_media = msg_data.get("hasMedia", False)
+        media_url = (msg_data.get("media") or {}).get("url", "")
+        num_media = 1 if has_media and media_url else 0
+
+        def _reply(text, murl=None):
+            send_msg(sender, text, media_url=murl)
+            return "", 200
+
+    else:
+        # Twilio format
+        num_media = int(request.form.get("NumMedia", 0))
+        sender    = request.form.get("From", "")
+        body_text = request.form.get("Body", "").strip()
+        media_url = request.form.get("MediaUrl0", "")
+        from twilio.twiml.messaging_response import MessagingResponse
+        _resp = MessagingResponse()
+        _msg  = _resp.message()
+
+        def _reply(text, murl=None):
+            _msg.body(text)
+            return str(_resp)
+
+    if not sender:
+        return "", 200
+
+    conv  = _get_conv(sender)
+    state = conv["state"]
 
     # ── Selfie received ───────────────────────────────────────────────────────
     if num_media > 0:
-        media_url = request.form.get("MediaUrl0")
         if not media_url:
-            msg.body("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
-            return str(resp)
+            return _reply("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
 
         event_code = conv.get("event_code")
         if not event_code or not get_event(event_code):
             todays = get_todays_events()
             if len(todays) == 1:
-                # Exactly one wedding today — auto-select
                 event_code = todays[0][0]
                 _set_conv(sender, "awaiting_selfie", event_code=event_code)
             elif len(_events) == 1:
-                # Only one wedding ever registered — auto-select
                 event_code = next(iter(_events))
                 _set_conv(sender, "awaiting_selfie", event_code=event_code)
             elif len(todays) > 1:
-                # Multiple weddings today — show numbered list
                 options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(todays))
                 _set_conv(sender, "choosing_event")
                 _conv[sender]["today_events"] = [c for c, _ in todays]
-                msg.body(f"🌙 فيه أكثر من حفل اليوم، اختر الحفل الذي أنت فيه:\n\n{options}")
-                return str(resp)
+                return _reply(f"🌙 فيه أكثر من حفل اليوم، اختر الحفل الذي أنت فيه:\n\n{options}")
             else:
-                msg.body("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
-                return str(resp)
+                return _reply("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
 
         selfie_bytes = None
-        for auth in [None, (TWILIO_SID, TWILIO_TOKEN)]:
+        auth_opts = [None, (TWILIO_SID, TWILIO_TOKEN)] if TWILIO_SID else [None]
+        for auth in auth_opts:
             try:
                 r = requests.get(media_url, auth=auth, timeout=20, allow_redirects=True)
                 if r.status_code == 200:
@@ -1014,34 +1047,25 @@ def whatsapp_webhook():
                 print(f"[DOWNLOAD] error: {e}", flush=True)
 
         if not selfie_bytes:
-            msg.body("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
-            return str(resp)
+            return _reply("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
 
         _clear_conv(sender)
-        app_ctx = app.app_context()
+        _sender, _event_code = sender, event_code
 
         def run():
-            app_ctx.push()
             try:
-                search_and_send(selfie_bytes, sender, event_code)
+                search_and_send(selfie_bytes, _sender, _event_code)
             except Exception as e:
                 print(f"[ERROR] {e}", flush=True)
-                try:
-                    twilio_client.messages.create(from_=TWILIO_WHATSAPP, to=sender, body=f"⚠️ {str(e)}")
-                except Exception:
-                    pass
-            finally:
-                app_ctx.pop()
+                send_msg(_sender, f"⚠️ {str(e)}")
 
         threading.Thread(target=run, daemon=True).start()
         event_name = get_event(event_code)["name"]
-        msg.body(f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳")
-        return str(resp)
+        return _reply(f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳")
 
     # ── Text received ─────────────────────────────────────────────────────────
     upper = body_text.upper().strip()
 
-    # Guest choosing between multiple today's weddings
     if state == "choosing_event":
         today_list = conv.get("today_events", [])
         try:
@@ -1050,108 +1074,87 @@ def whatsapp_webhook():
                 chosen = today_list[idx]
                 event  = get_event(chosen)
                 _set_conv(sender, "awaiting_selfie", event_code=chosen)
-                msg.body(f"✨ اخترت *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد صورك 📸")
-                return str(resp)
+                return _reply(f"✨ اخترت *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد صورك 📸")
         except (ValueError, TypeError):
             pass
         options = "\n".join(f"*{i+1}* — {get_event(c)['name']}" for i, c in enumerate(today_list))
-        msg.body(f"أرسل رقم الحفل:\n\n{options}")
-        return str(resp)
+        return _reply(f"أرسل رقم الحفل:\n\n{options}")
 
-    # Check if the text is a registered event code (from QR)
     if upper in _events:
         event = _events[upper]
         _set_conv(sender, "awaiting_selfie", event_code=upper)
-        msg.body(
+        return _reply(
             f"🌙 أهلاً بك في *{event['name']}*!\n\n"
             "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من الحفل 🎉📸"
         )
-        return str(resp)
 
-    # Reset keywords
-    if any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start", "مرحبا")):
+    if any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start")):
         _clear_conv(sender)
         state = "new"
 
-    # New user — show menu
     if state == "new":
         _set_conv(sender, "routing")
-        msg.body(
+        return _reply(
             "🌙 أهلاً وسهلاً!\n\n"
             "كيف أقدر أساعدك؟\n\n"
             "رد بـ *1* — إذا كنت ضيفاً تبحث عن صورك من الحفل 📸\n"
             "رد بـ *2* — إذا لديك استفسار عام 💬"
         )
-        return str(resp)
 
     if state == "routing":
         if body_text in ("1", "١") or any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل")):
             todays = get_todays_events()
             if len(todays) == 1:
-                code  = todays[0][0]
-                event = todays[0][1]
+                code, event = todays[0]
                 _set_conv(sender, "awaiting_selfie", event_code=code)
-                msg.body(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك 🎉📸")
-                return str(resp)
+                return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك 🎉📸")
             elif len(_events) == 1:
                 code  = next(iter(_events))
                 event = _events[code]
                 _set_conv(sender, "awaiting_selfie", event_code=code)
-                msg.body(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك 🎉📸")
-                return str(resp)
+                return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك 🎉📸")
             elif len(todays) > 1:
                 options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(todays))
                 _set_conv(sender, "choosing_event")
                 _conv[sender]["today_events"] = [c for c, _ in todays]
-                msg.body(f"🌙 فيه أكثر من حفل اليوم، اختر الحفل الذي أنت فيه:\n\n{options}")
-                return str(resp)
+                return _reply(f"🌙 فيه أكثر من حفل اليوم، اختر الحفل الذي أنت فيه:\n\n{options}")
             _set_conv(sender, "awaiting_event_code")
             codes = ", ".join(_events.keys()) if _events else "(لا يوجد أحداث مسجلة)"
-            msg.body(
+            return _reply(
                 "✨ ممتاز!\n\n"
                 f"أرسل لي *كود الحفل* — ستجده على QR الكود في الحفل.\n\n"
                 f"الأحداث المتاحة: {codes}"
             )
         elif body_text in ("2", "٢") or any(w in body_text for w in ("استفسار", "سؤال")):
             _set_conv(sender, "awaiting_inquiry")
-            msg.body("بكل سرور! اكتب استفسارك وسأوصله لفريقنا 💬")
+            return _reply("بكل سرور! اكتب استفسارك وسأوصله لفريقنا 💬")
         else:
-            msg.body("من فضلك رد بـ *1* أو *2*.")
-        return str(resp)
+            return _reply("من فضلك رد بـ *1* أو *2*.")
 
     if state == "awaiting_event_code":
-        msg.body(
+        return _reply(
             f"⚠️ الكود '{body_text}' غير موجود.\n\n"
             "تأكد من الكود وحاول مرة ثانية، أو امسح QR الكود من الحفل مباشرة."
         )
-        return str(resp)
 
     if state == "awaiting_selfie":
         event_name = get_event(conv.get("event_code", ""))
         name = event_name["name"] if event_name else "الحفل"
-        msg.body(f"📸 أرسل لي *سيلفي* لوجهك وسأجد صورك من {name}!")
-        return str(resp)
+        return _reply(f"📸 أرسل لي *سيلفي* لوجهك وسأجد صورك من {name}!")
 
     if state == "awaiting_inquiry":
         _clear_conv(sender)
-        msg.body("شكراً! تم إيصال استفسارك وسيتواصل معك فريقنا قريباً 🌙")
-        try:
-            twilio_client.messages.create(
-                from_=TWILIO_WHATSAPP, to=OWNER_WHATSAPP,
-                body=f"📩 استفسار جديد\nمن: {sender.replace('whatsapp:', '')}\n\n{body_text}"
-            )
-        except Exception as e:
-            print(f"[INQUIRY] Forward error: {e}", flush=True)
-        return str(resp)
+        clean_sender = sender.replace("whatsapp:", "")
+        send_msg(OWNER_WHATSAPP, f"📩 استفسار جديد\nمن: {clean_sender}\n\n{body_text}")
+        return _reply("شكراً! تم إيصال استفسارك وسيتواصل معك فريقنا قريباً 🌙")
 
     # Fallback
     _set_conv(sender, "routing")
-    msg.body(
+    return _reply(
         "🌙 أهلاً وسهلاً!\n\n"
         "رد بـ *1* — تبحث عن صورك 📸\n"
         "رد بـ *2* — استفسار عام 💬"
     )
-    return str(resp)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
