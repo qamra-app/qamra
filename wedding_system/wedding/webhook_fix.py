@@ -1042,14 +1042,31 @@ def _handle_whatsapp():
     if data.get("event") != "message:in:new":
         return "", 200
     msg_data  = data.get("data", {})
-    print(f"[WH] keys={list(msg_data.keys())[:15]}", flush=True)
-    print(f"[WH] hasMedia={msg_data.get('hasMedia')} media={msg_data.get('media')} body={str(msg_data.get('body',''))[:80]}", flush=True)
     sender    = msg_data.get("phone") or msg_data.get("from") or msg_data.get("sender") or ""
     body_text = (msg_data.get("body") or "").strip()
     has_media = msg_data.get("hasMedia", False)
+    msg_id    = msg_data.get("id") or msg_data.get("_id") or ""
+    # Cloud API connector does not embed media URL in webhook — fetch via API
     media_url = (msg_data.get("media") or {}).get("url", "")
-    print(f"[WH] sender={sender} has_media={has_media} media_url={media_url!r}", flush=True)
-    num_media = 1 if has_media and media_url else 0
+    if has_media and not media_url and msg_id and WASSENGER_API_KEY:
+        try:
+            mresp = requests.get(
+                f"https://api.wassenger.com/v1/messages/{msg_id}/media",
+                headers={"Authorization": WASSENGER_API_KEY},
+                timeout=20,
+            )
+            print(f"[MEDIA] fetch status={mresp.status_code} size={len(mresp.content)}", flush=True)
+            if mresp.status_code == 200 and mresp.content:
+                # Return raw bytes directly — skip URL-based download
+                _media_bytes_override = mresp.content
+            else:
+                _media_bytes_override = None
+        except Exception as e:
+            print(f"[MEDIA] fetch error: {e}", flush=True)
+            _media_bytes_override = None
+    else:
+        _media_bytes_override = None
+    num_media = 1 if has_media and (media_url or _media_bytes_override) else 0
 
     def _reply(text, murl=None):
         send_msg(sender, text, media_url=murl)
@@ -1083,15 +1100,16 @@ def _handle_whatsapp():
             else:
                 return _reply("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
 
-        selfie_bytes = None
-        print(f"[SELFIE] downloading from {media_url!r}", flush=True)
-        try:
-            r = requests.get(media_url, timeout=20, allow_redirects=True)
-            print(f"[SELFIE] download status={r.status_code} size={len(r.content)}", flush=True)
-            if r.status_code == 200:
-                selfie_bytes = r.content
-        except Exception as e:
-            print(f"[SELFIE] download error: {e}", flush=True)
+        if _media_bytes_override:
+            selfie_bytes = _media_bytes_override
+        else:
+            selfie_bytes = None
+            try:
+                r = requests.get(media_url, timeout=20, allow_redirects=True)
+                if r.status_code == 200:
+                    selfie_bytes = r.content
+            except Exception as e:
+                print(f"[SELFIE] download error: {e}", flush=True)
 
         if not selfie_bytes:
             return _reply("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
