@@ -1035,7 +1035,8 @@ def whatsapp_webhook():
     if data.get("event") != "message:in:new":
         return "", 200
     msg_data  = data.get("data", {})
-    sender    = msg_data.get("phone", "")
+    print(f"[WH] keys={list(msg_data.keys())[:10]} phone={msg_data.get('phone')} from={msg_data.get('from')} sender={msg_data.get('sender')}", flush=True)
+    sender    = msg_data.get("phone") or msg_data.get("from") or msg_data.get("sender") or ""
     body_text = (msg_data.get("body") or "").strip()
     has_media = msg_data.get("hasMedia", False)
     media_url = (msg_data.get("media") or {}).get("url", "")
