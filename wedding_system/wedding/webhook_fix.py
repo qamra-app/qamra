@@ -211,13 +211,33 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 def _s3_key(event_code):
     return f"qamra_state_{event_code}.json"
 
+def _s3_client():
+    return boto3.client("s3", region_name=AWS_REGION,
+                        aws_access_key_id=AWS_ACCESS_KEY_ID,
+                        aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+
+def _ensure_s3_bucket():
+    if not S3_BUCKET:
+        return
+    try:
+        s3 = _s3_client()
+        if AWS_REGION == "us-east-1":
+            s3.create_bucket(Bucket=S3_BUCKET)
+        else:
+            s3.create_bucket(Bucket=S3_BUCKET,
+                             CreateBucketConfiguration={"LocationConstraint": AWS_REGION})
+        print(f"[S3] Bucket {S3_BUCKET} created", flush=True)
+    except Exception as e:
+        if "BucketAlreadyOwnedByYou" in str(e) or "BucketAlreadyExists" in str(e):
+            pass  # already exists
+        else:
+            print(f"[S3] Bucket ensure error: {e}", flush=True)
+
 def _save_state_to_s3(event_code, data):
     if not S3_BUCKET:
         return
     try:
-        s3 = boto3.client("s3", region_name=AWS_REGION,
-                          aws_access_key_id=AWS_ACCESS_KEY_ID,
-                          aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+        s3 = _s3_client()
         s3.put_object(Bucket=S3_BUCKET, Key=_s3_key(event_code),
                       Body=json.dumps(data, ensure_ascii=False).encode(),
                       ContentType="application/json")
@@ -229,9 +249,7 @@ def _load_state_from_s3(event_code):
     if not S3_BUCKET:
         return None
     try:
-        s3  = boto3.client("s3", region_name=AWS_REGION,
-                           aws_access_key_id=AWS_ACCESS_KEY_ID,
-                           aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+        s3  = _s3_client()
         obj = s3.get_object(Bucket=S3_BUCKET, Key=_s3_key(event_code))
         s   = json.loads(obj["Body"].read())
         print(f"[STATE] Loaded {event_code} from S3 ({len(s.get('indexed_ids',[]))} ids)", flush=True)
@@ -1350,6 +1368,7 @@ def _ensure_webhook():
         print(f"[WEBHOOK_INIT] Error: {e}", flush=True)
 
 threading.Thread(target=_ensure_webhook, daemon=True).start()
+threading.Thread(target=_ensure_s3_bucket, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
