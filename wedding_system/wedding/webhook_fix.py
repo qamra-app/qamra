@@ -1066,6 +1066,7 @@ def _handle_whatsapp():
     sender    = msg_data.get("phone") or msg_data.get("from") or msg_data.get("sender") or ""
     body_text = (msg_data.get("body") or "").strip()
     has_media = msg_data.get("hasMedia", False)
+    print(f"[WH_FULL] {json.dumps({k:v for k,v in msg_data.items() if k not in ('thumbnail',)})[:600]}", flush=True)
     msg_id    = msg_data.get("id") or msg_data.get("_id") or ""
     # Cloud API connector may not embed media URL — resolve via API
     media_obj = msg_data.get("media") or {}
