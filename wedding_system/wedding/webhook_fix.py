@@ -17,22 +17,8 @@ from PIL import Image, ImageOps
 app = Flask(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Set MESSAGING_PROVIDER=twilio to roll back to Twilio at any time
-MESSAGING_PROVIDER = os.environ.get("MESSAGING_PROVIDER", "wassenger")
-
 WASSENGER_API_KEY  = os.environ.get("WASSENGER_API_KEY", "")
 WASSENGER_API_URL  = "https://api.wassenger.com/v1/messages"
-
-# Twilio — kept for rollback (set MESSAGING_PROVIDER=twilio to re-enable)
-TWILIO_SID      = os.environ.get("TWILIO_SID", "")
-TWILIO_TOKEN    = os.environ.get("TWILIO_TOKEN", "")
-TWILIO_WHATSAPP = os.environ.get("TWILIO_WHATSAPP", "whatsapp:+97470263297")
-
-twilio_client = None
-if TWILIO_SID and TWILIO_TOKEN:
-    from twilio.rest import Client
-    from twilio.twiml.messaging_response import MessagingResponse
-    twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
 
 AWS_ACCESS_KEY_ID       = os.environ["AWS_ACCESS_KEY_ID"]
 AWS_SECRET_ACCESS_KEY   = os.environ["AWS_SECRET_ACCESS_KEY"]
@@ -40,8 +26,7 @@ AWS_REGION              = os.environ.get("AWS_REGION", "us-east-1")
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 APP_URL                 = os.environ.get("APP_URL", "https://qamra-production.up.railway.app")
 ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "qamra-admin-2026")
-OWNER_WHATSAPP          = os.environ.get("OWNER_WHATSAPP", "whatsapp:+97470263297")
-OWNER_PHONE             = OWNER_WHATSAPP.replace("whatsapp:", "").replace("+", "")
+OWNER_PHONE             = os.environ.get("OWNER_PHONE", "97470263297")
 
 MATCH_CONF  = 80
 MEDIA_DIR   = "/tmp/qamra_media"
@@ -50,26 +35,19 @@ EVENTS_DRIVE_NAME = "_qamra_events_.json"
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
-# ── Unified message sender ────────────────────────────────────────────────────
+# ── Message sender ────────────────────────────────────────────────────────────
 def send_msg(to, body, media_url=None):
-    """Send a WhatsApp message via Wassenger or Twilio depending on MESSAGING_PROVIDER."""
-    if MESSAGING_PROVIDER == "twilio" and twilio_client:
-        kwargs = {"from_": TWILIO_WHATSAPP, "to": to, "body": body}
-        if media_url:
-            kwargs["media_url"] = [media_url]
-        twilio_client.messages.create(**kwargs)
-    else:
-        payload = {"phone": to, "message": body}
-        if media_url:
-            payload["media"] = {"url": media_url}
-        try:
-            r = requests.post(WASSENGER_API_URL, json=payload,
-                              headers={"Authorization": WASSENGER_API_KEY,
-                                       "Content-Type": "application/json"},
-                              timeout=20)
-            r.raise_for_status()
-        except Exception as e:
-            print(f"[WASSENGER] Send error to {to}: {e}", flush=True)
+    payload = {"phone": to, "message": body}
+    if media_url:
+        payload["media"] = {"url": media_url}
+    try:
+        r = requests.post(WASSENGER_API_URL, json=payload,
+                          headers={"Authorization": WASSENGER_API_KEY,
+                                   "Content-Type": "application/json"},
+                          timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"[WASSENGER] Send error to {to}: {e}", flush=True)
 
 rek = boto3.client(
     "rekognition",
@@ -976,36 +954,19 @@ def event_landing(code):
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
-    # ── Parse request — supports both Wassenger (JSON) and Twilio (form) ──────
-    if request.is_json:
-        # Wassenger format
-        data      = request.get_json(silent=True) or {}
-        if data.get("event") != "message:in:new":
-            return "", 200
-        msg_data  = data.get("data", {})
-        sender    = msg_data.get("phone", "")
-        body_text = (msg_data.get("body") or "").strip()
-        has_media = msg_data.get("hasMedia", False)
-        media_url = (msg_data.get("media") or {}).get("url", "")
-        num_media = 1 if has_media and media_url else 0
+    data      = request.get_json(silent=True) or {}
+    if data.get("event") != "message:in:new":
+        return "", 200
+    msg_data  = data.get("data", {})
+    sender    = msg_data.get("phone", "")
+    body_text = (msg_data.get("body") or "").strip()
+    has_media = msg_data.get("hasMedia", False)
+    media_url = (msg_data.get("media") or {}).get("url", "")
+    num_media = 1 if has_media and media_url else 0
 
-        def _reply(text, murl=None):
-            send_msg(sender, text, media_url=murl)
-            return "", 200
-
-    else:
-        # Twilio format
-        num_media = int(request.form.get("NumMedia", 0))
-        sender    = request.form.get("From", "")
-        body_text = request.form.get("Body", "").strip()
-        media_url = request.form.get("MediaUrl0", "")
-        from twilio.twiml.messaging_response import MessagingResponse
-        _resp = MessagingResponse()
-        _msg  = _resp.message()
-
-        def _reply(text, murl=None):
-            _msg.body(text)
-            return str(_resp)
+    def _reply(text, murl=None):
+        send_msg(sender, text, media_url=murl)
+        return "", 200
 
     if not sender:
         return "", 200
@@ -1036,15 +997,12 @@ def whatsapp_webhook():
                 return _reply("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
 
         selfie_bytes = None
-        auth_opts = [None, (TWILIO_SID, TWILIO_TOKEN)] if TWILIO_SID else [None]
-        for auth in auth_opts:
-            try:
-                r = requests.get(media_url, auth=auth, timeout=20, allow_redirects=True)
-                if r.status_code == 200:
-                    selfie_bytes = r.content
-                    break
-            except Exception as e:
-                print(f"[DOWNLOAD] error: {e}", flush=True)
+        try:
+            r = requests.get(media_url, timeout=20, allow_redirects=True)
+            if r.status_code == 200:
+                selfie_bytes = r.content
+        except Exception as e:
+            print(f"[DOWNLOAD] error: {e}", flush=True)
 
         if not selfie_bytes:
             return _reply("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")

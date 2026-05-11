@@ -1,6 +1,5 @@
 # requirements.txt
 flask
-twilio
 requests
 google-auth
 google-api-python-client
