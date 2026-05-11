@@ -919,17 +919,43 @@ def admin_test_media():
         return jsonify({"error": "No message cached — send a selfie first then retry", **results}), 400
     hdrs = {"Authorization": WASSENGER_API_KEY}
     BASE = "https://api.wassenger.com"
+    # First do a message lookup to see full API response and any download URL
+    if msg_link:
+        try:
+            r = requests.get(f"{BASE}{msg_link}", headers=hdrs, timeout=15)
+            try:
+                body = r.json()
+                results["msg_lookup"] = {"status": r.status_code, "body": body}
+                # Extract any media URLs from the full API response
+                mo = body.get("media") or {}
+                api_dl = (mo.get("url") or (mo.get("links") or {}).get("download") or
+                          mo.get("link") or mo.get("downloadUrl") or "")
+                if api_dl:
+                    results["api_media_url"] = api_dl
+            except Exception:
+                results["msg_lookup"] = {"status": r.status_code, "body_raw": r.text[:500]}
+        except Exception as e:
+            results["msg_lookup"] = {"error": str(e)}
+    # Try download paths
     paths_to_try = []
     if msg_link:
         paths_to_try.append(f"{msg_link}/download")
+        paths_to_try.append(f"{msg_link}/media")
     if device_id and msg_id:
-        paths_to_try.append(f"/v1/devices/{device_id}/messages/{msg_id}/download")
-    paths_to_try.append(f"/v1/messages/{msg_id}/download")
+        paths_to_try += [
+            f"/v1/devices/{device_id}/messages/{msg_id}/download",
+            f"/v1/devices/{device_id}/messages/{msg_id}/media",
+        ]
+    paths_to_try += [
+        f"/v1/messages/{msg_id}/download",
+        f"/v1/messages/{msg_id}/media",
+    ]
     for p in paths_to_try:
         try:
             r = requests.get(f"{BASE}{p}", headers=hdrs, timeout=15)
             ct = r.headers.get("Content-Type", "")
-            results[p] = {"status": r.status_code, "content_type": ct, "size": len(r.content)}
+            results[p] = {"status": r.status_code, "content_type": ct, "size": len(r.content),
+                          "body_snippet": r.text[:200] if r.status_code != 200 else ""}
             if r.status_code == 200 and len(r.content) > 1000:
                 results["SUCCESS"] = p
                 break
