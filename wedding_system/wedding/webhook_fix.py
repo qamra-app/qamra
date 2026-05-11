@@ -1180,38 +1180,54 @@ def _handle_whatsapp():
     print(f"[WH_FULL] {json.dumps({k:v for k,v in msg_data.items() if k not in ('thumbnail',) or v})[:1500]}", flush=True)
     msg_id    = msg_data.get("id") or msg_data.get("_id") or msg_data.get("messageId") or ""
     waba_id   = msg_data.get("wabaId") or msg_data.get("wamid") or ""
+    device_id = data.get("device", {}).get("id") or ""
+    msg_link  = (msg_data.get("links") or {}).get("message") or ""   # e.g. /v1/chat/{device_id}/messages/{id}
     media_obj = msg_data.get("media") or msg_data.get("attachment") or {}
     media_url = (media_obj.get("url") or media_obj.get("link") or
-                 media_obj.get("mediaUrl") or media_obj.get("downloadUrl") or "")
+                 media_obj.get("mediaUrl") or media_obj.get("downloadUrl") or
+                 ((media_obj.get("links") or {}).get("download") or ""))
     media_wid = (media_obj.get("id") or media_obj.get("_id") or
                  media_obj.get("mediaId") or "")
-    print(f"[MEDIA] msg_id={msg_id!r} waba_id={waba_id!r} media_wid={media_wid!r} media_url={media_url!r} has_media={has_media}", flush=True)
+    print(f"[MEDIA] msg_id={msg_id!r} device_id={device_id!r} msg_link={msg_link!r} media_wid={media_wid!r} media_url={media_url!r} has_media={has_media}", flush=True)
     _media_bytes_override = None
     if has_media and WASSENGER_API_KEY:
         hdrs = {"Authorization": WASSENGER_API_KEY}
         BASE = "https://api.wassenger.com"
-        # Step 1: try to get media URL from full message lookup
+        # Step 1: try to get media URL from full message lookup using correct chat endpoint
         if not media_url:
-            for lookup in [f"/v1/messages/{msg_id}", f"/v1/messages/{waba_id}"]:
-                if not lookup.endswith("/"):
+            lookups = []
+            if msg_link:
+                lookups.append(msg_link)                                          # /v1/chat/{dev}/messages/{id}
+            if device_id and msg_id:
+                lookups.append(f"/v1/devices/{device_id}/messages/{msg_id}")
+            lookups += [f"/v1/messages/{msg_id}", f"/v1/messages/{waba_id}"]
+            for lookup in lookups:
+                if lookup and not lookup.endswith("/"):
                     try:
                         r = requests.get(f"{BASE}{lookup}", headers=hdrs, timeout=15)
                         print(f"[MEDIA] GET {lookup} => {r.status_code} body={r.text[:300]}", flush=True)
                         if r.status_code == 200:
                             d = r.json()
-                            media_url = ((d.get("media") or {}).get("url") or
-                                         (d.get("media") or {}).get("link") or "")
+                            mo = d.get("media") or {}
+                            media_url = (mo.get("url") or mo.get("link") or
+                                         (mo.get("links") or {}).get("download") or "")
                             if media_url:
                                 break
                     except Exception as e:
                         print(f"[MEDIA] GET {lookup} error: {e}", flush=True)
-        # Step 2: try direct binary download
+        # Step 2: try direct binary download using correct chat endpoint
         if not media_url and not _media_bytes_override:
-            for path in [
+            dl_paths = []
+            if msg_link:
+                dl_paths.append(f"{msg_link}/download")
+            if device_id and msg_id:
+                dl_paths.append(f"/v1/devices/{device_id}/messages/{msg_id}/download")
+            dl_paths += [
                 f"/v1/messages/{msg_id}/download",
                 f"/v1/messages/{msg_id}/media",
                 f"/v1/files/{media_wid}",
-            ]:
+            ]
+            for path in dl_paths:
                 if not path.endswith("/"):
                     try:
                         r = requests.get(f"{BASE}{path}", headers=hdrs, timeout=20)
