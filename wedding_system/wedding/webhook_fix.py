@@ -16,6 +16,20 @@ from PIL import Image, ImageOps
 
 app = Flask(__name__)
 
+# ── In-memory log ring buffer ─────────────────────────────────────────────────
+import collections, sys
+_LOG_BUF = collections.deque(maxlen=200)
+
+class _LogCapture:
+    def __init__(self, orig): self._orig = orig
+    def write(self, s):
+        if s.strip(): _LOG_BUF.append(s.rstrip())
+        self._orig.write(s)
+    def flush(self): self._orig.flush()
+
+sys.stdout = _LogCapture(sys.stdout)
+sys.stderr = _LogCapture(sys.stderr)
+
 # ── Config ────────────────────────────────────────────────────────────────────
 WASSENGER_API_KEY  = os.environ.get("WASSENGER_API_KEY", "")
 WASSENGER_API_URL  = "https://api.wassenger.com/v1/messages"
@@ -858,6 +872,13 @@ def admin_delete_event(code):
         del _events[code]
         save_events()
     return jsonify({"status": "deleted", "event": code}), 200
+
+@app.route("/admin/logs", methods=["GET"])
+def admin_logs():
+    token = request.args.get("token", "")
+    if token != ADMIN_TOKEN:
+        return jsonify({"error": "unauthorized"}), 401
+    return jsonify({"logs": list(_LOG_BUF)}), 200
 
 @app.route("/admin/wassenger", methods=["GET"])
 def admin_wassenger():
