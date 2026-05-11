@@ -906,14 +906,17 @@ def admin_test_media():
     if not _check_admin():
         return jsonify({"error": "Unauthorized"}), 401
     msg_data  = _last_webhook.get("data", {})
-    msg_id    = msg_data.get("id") or ""
-    device_id = _last_webhook.get("device", {}).get("id") or ""
-    msg_link  = (msg_data.get("links") or {}).get("message") or ""
+    # Allow overriding from query params for testing
+    msg_id    = request.args.get("msg_id") or msg_data.get("id") or ""
+    device_id = request.args.get("device_id") or _last_webhook.get("device", {}).get("id") or ""
+    msg_link  = request.args.get("msg_link") or (msg_data.get("links") or {}).get("message") or ""
     media_obj = msg_data.get("media") or {}
     media_status = media_obj.get("status", "")
     results = {"msg_id": msg_id, "device_id": device_id, "msg_link": msg_link, "media_status": media_status}
-    if not WASSENGER_API_KEY or not msg_id:
-        return jsonify({"error": "No API key or no message cached", **results}), 400
+    if not WASSENGER_API_KEY:
+        return jsonify({"error": "No API key set", **results}), 400
+    if not msg_id:
+        return jsonify({"error": "No message cached — send a selfie first then retry", **results}), 400
     hdrs = {"Authorization": WASSENGER_API_KEY}
     BASE = "https://api.wassenger.com"
     paths_to_try = []
