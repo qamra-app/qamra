@@ -1063,10 +1063,12 @@ def _handle_whatsapp():
     if data.get("event") != "message:in:new":
         return "", 200
     msg_data  = data.get("data", {})
-    sender    = msg_data.get("phone") or msg_data.get("from") or msg_data.get("sender") or ""
+    sender    = (msg_data.get("fromNumber") or msg_data.get("phone") or
+                 msg_data.get("from") or msg_data.get("sender") or "").replace("+", "")
     body_text = (msg_data.get("body") or "").strip()
-    has_media = msg_data.get("hasMedia", False)
-    print(f"[WH_FULL] {json.dumps({k:v for k,v in msg_data.items() if k not in ('thumbnail',)})[:600]}", flush=True)
+    msg_type  = msg_data.get("type", "")
+    has_media = msg_type in ("image", "video", "audio", "document", "sticker") or msg_data.get("hasMedia", False)
+    print(f"[WH_FULL] {json.dumps({k:v for k,v in msg_data.items() if k not in ('thumbnail','body') or v})[:1200]}", flush=True)
     msg_id    = msg_data.get("id") or msg_data.get("_id") or ""
     # Cloud API connector may not embed media URL — resolve via API
     media_obj = msg_data.get("media") or {}
