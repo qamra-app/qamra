@@ -925,9 +925,9 @@ def admin_reset_webhook():
                         results[f"deleted_{hid}"] = del_r.status_code
 
                 create_r = requests.post(path, json={
+                    "name": "qamra-webhook",
                     "url": webhook_url,
                     "events": ["message:in:new"],
-                    "enabled": True,
                 }, headers=headers, timeout=10)
                 results["created"] = {"status": create_r.status_code, "body": create_r.json()}
                 return jsonify(results), 200
@@ -1198,31 +1198,19 @@ def _ensure_webhook():
     headers = {"Authorization": WASSENGER_API_KEY, "Content-Type": "application/json"}
     webhook_url = f"{APP_URL}/whatsapp"
     try:
-        devices = requests.get("https://api.wassenger.com/v1/devices", headers=headers, timeout=15).json()
-        if not devices or not isinstance(devices, list):
-            print("[WEBHOOK_INIT] No devices found", flush=True)
-            return
-        device_id = devices[0].get("id") or devices[0].get("_id")
-        if not device_id:
-            print("[WEBHOOK_INIT] Could not determine device ID", flush=True)
-            return
-
-        hooks = requests.get(f"https://api.wassenger.com/v1/devices/{device_id}/webhooks",
-                             headers=headers, timeout=15).json()
+        hooks_r = requests.get("https://api.wassenger.com/v1/webhooks", headers=headers, timeout=15)
+        hooks = hooks_r.json() if hooks_r.status_code == 200 else []
         already = any(h.get("url") == webhook_url for h in (hooks if isinstance(hooks, list) else []))
         if already:
-            print(f"[WEBHOOK_INIT] Webhook already registered on device {device_id}", flush=True)
+            print("[WEBHOOK_INIT] Webhook already registered", flush=True)
             return
-
-        payload = {
+        r = requests.post("https://api.wassenger.com/v1/webhooks", json={
+            "name": "qamra-webhook",
             "url": webhook_url,
             "events": ["message:in:new"],
-            "enabled": True,
-        }
-        r = requests.post(f"https://api.wassenger.com/v1/devices/{device_id}/webhooks",
-                          json=payload, headers=headers, timeout=15)
+        }, headers=headers, timeout=15)
         if r.status_code in (200, 201):
-            print(f"[WEBHOOK_INIT] Webhook registered on device {device_id}", flush=True)
+            print(f"[WEBHOOK_INIT] Webhook registered: {r.json().get('id')}", flush=True)
         else:
             print(f"[WEBHOOK_INIT] Registration failed {r.status_code}: {r.text[:200]}", flush=True)
     except Exception as e:
