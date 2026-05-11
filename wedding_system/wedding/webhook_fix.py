@@ -469,6 +469,7 @@ def create_guest_folder(sender_label, file_ids, event_name):
 
 # ── WhatsApp search + send ────────────────────────────────────────────────────
 def search_and_send(selfie_bytes, sender, event_code):
+    print(f"[SEARCH] start sender={sender} event={event_code} selfie_size={len(selfie_bytes)}", flush=True)
     event    = get_event(event_code)
     if not event:
         send_msg(sender, "⚠️ الحفل غير موجود. تأكد من الكود وحاول مرة ثانية.")
@@ -476,12 +477,14 @@ def search_and_send(selfie_bytes, sender, event_code):
 
     state    = load_state(event_code)
     file_map = state.get("file_map", {})
+    print(f"[SEARCH] indexed={len(state.get('indexed_ids',[]))} collection={event.get('collection_id')}", flush=True)
 
     if not state.get("indexed_ids"):
         send_msg(sender, "⏳ الصور لم تُفهرس بعد — تواصل مع المنظم")
         return
 
     matches = search_by_selfie(selfie_bytes, event["collection_id"])
+    print(f"[SEARCH] rekognition matches={len(matches) if matches else 0}", flush=True)
     if not matches:
         send_msg(sender, "😕 ما لقيت وجه في الصورة أو ما لقيت صورك — أرسل سيلفي واضح وحاول مرة ثانية")
         return
@@ -1070,36 +1073,52 @@ def _handle_whatsapp():
     has_media = msg_type in ("image", "video", "audio", "document", "sticker") or msg_data.get("hasMedia", False)
     print(f"[WH_FULL] {json.dumps({k:v for k,v in msg_data.items() if k not in ('thumbnail','body') or v})[:1200]}", flush=True)
     msg_id    = msg_data.get("id") or msg_data.get("_id") or ""
-    # Cloud API connector may not embed media URL — resolve via API
+    waba_id   = msg_data.get("wabaId") or ""
     media_obj = msg_data.get("media") or {}
     media_url = media_obj.get("url") or media_obj.get("link") or ""
+    media_wid = media_obj.get("id") or media_obj.get("_id") or ""
+    print(f"[MEDIA] msg_id={msg_id!r} waba_id={waba_id!r} media_wid={media_wid!r} media_url={media_url!r}", flush=True)
     _media_bytes_override = None
     if has_media and WASSENGER_API_KEY:
         hdrs = {"Authorization": WASSENGER_API_KEY}
-        # Try fetching full message to get resolved media URL
-        if not media_url and msg_id:
-            try:
-                full = requests.get(f"https://api.wassenger.com/v1/messages/{msg_id}",
-                                    headers=hdrs, timeout=15).json()
-                media_url = ((full.get("media") or {}).get("url") or
-                             (full.get("media") or {}).get("link") or "")
-                print(f"[MEDIA] resolved url={media_url!r}", flush=True)
-            except Exception as e:
-                print(f"[MEDIA] resolve error: {e}", flush=True)
-        # If still no URL, download binary directly
-        if not media_url and msg_id:
-            for path in [f"/v1/messages/{msg_id}/download", f"/v1/messages/{msg_id}/media"]:
-                try:
-                    r = requests.get(f"https://api.wassenger.com{path}",
-                                     headers=hdrs, timeout=20)
-                    print(f"[MEDIA] {path} status={r.status_code} size={len(r.content)}", flush=True)
-                    if r.status_code == 200 and len(r.content) > 1000:
-                        _media_bytes_override = r.content
-                        break
-                except Exception as e:
-                    print(f"[MEDIA] {path} error: {e}", flush=True)
+        BASE = "https://api.wassenger.com"
+        # Step 1: try to get media URL from full message lookup
+        if not media_url:
+            for lookup in [f"/v1/messages/{msg_id}", f"/v1/messages/{waba_id}"]:
+                if not lookup.endswith("/"):
+                    try:
+                        r = requests.get(f"{BASE}{lookup}", headers=hdrs, timeout=15)
+                        print(f"[MEDIA] GET {lookup} => {r.status_code} body={r.text[:300]}", flush=True)
+                        if r.status_code == 200:
+                            d = r.json()
+                            media_url = ((d.get("media") or {}).get("url") or
+                                         (d.get("media") or {}).get("link") or "")
+                            if media_url:
+                                break
+                    except Exception as e:
+                        print(f"[MEDIA] GET {lookup} error: {e}", flush=True)
+        # Step 2: try direct binary download
+        if not media_url and not _media_bytes_override:
+            for path in [
+                f"/v1/messages/{msg_id}/download",
+                f"/v1/messages/{msg_id}/media",
+                f"/v1/files/{media_wid}",
+            ]:
+                if not path.endswith("/"):
+                    try:
+                        r = requests.get(f"{BASE}{path}", headers=hdrs, timeout=20)
+                        ct = r.headers.get("Content-Type", "")
+                        print(f"[MEDIA] GET {path} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
+                        if r.status_code == 200 and "image" in ct and len(r.content) > 1000:
+                            _media_bytes_override = r.content
+                            break
+                        elif r.status_code == 200 and len(r.content) > 5000:
+                            _media_bytes_override = r.content
+                            break
+                    except Exception as e:
+                        print(f"[MEDIA] GET {path} error: {e}", flush=True)
     num_media = 1 if has_media and (media_url or _media_bytes_override) else 0
-    print(f"[WH] sender={sender} has_media={has_media} num_media={num_media} media_url={media_url!r}", flush=True)
+    print(f"[WH] sender={sender} type={msg_type} has_media={has_media} num_media={num_media} media_url={media_url!r}", flush=True)
 
     def _reply(text, murl=None):
         send_msg(sender, text, media_url=murl)
