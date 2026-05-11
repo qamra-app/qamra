@@ -190,6 +190,9 @@ def _state_drive_name(event_code):
     return f"_qamra_state_{event_code}_.json"
 
 def _save_state_to_drive(event_code, data):
+    global _drive_ok
+    if not _drive_ok:
+        return
     try:
         svc     = _drive(write=True)
         name    = _state_drive_name(event_code)
@@ -208,8 +211,11 @@ def _save_state_to_drive(event_code, data):
         print(f"[STATE] Saved {event_code} state to Drive ({len(data.get('indexed_ids',[]))} ids)", flush=True)
     except Exception as e:
         print(f"[STATE] Drive save error: {e}", flush=True)
+        _drive_ok = False
 
 S3_BUCKET = os.environ.get("S3_BUCKET", "qamra-state-backup")
+_s3_ok    = True
+_drive_ok = True
 
 def _s3_key(event_code):
     return f"qamra_state_{event_code}.json"
@@ -220,6 +226,7 @@ def _s3_client():
                         aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
 
 def _ensure_s3_bucket():
+    global _s3_ok
     if not S3_BUCKET:
         return
     try:
@@ -235,9 +242,11 @@ def _ensure_s3_bucket():
             pass  # already exists
         else:
             print(f"[S3] Bucket ensure error: {e}", flush=True)
+            _s3_ok = False
 
 def _save_state_to_s3(event_code, data):
-    if not S3_BUCKET:
+    global _s3_ok
+    if not S3_BUCKET or not _s3_ok:
         return
     try:
         s3 = _s3_client()
@@ -247,9 +256,11 @@ def _save_state_to_s3(event_code, data):
         print(f"[STATE] Saved {event_code} to S3 ({len(data.get('indexed_ids',[]))} ids)", flush=True)
     except Exception as e:
         print(f"[STATE] S3 save error: {e}", flush=True)
+        _s3_ok = False
 
 def _load_state_from_s3(event_code):
-    if not S3_BUCKET:
+    global _s3_ok
+    if not S3_BUCKET or not _s3_ok:
         return None
     try:
         s3  = _s3_client()
@@ -259,6 +270,7 @@ def _load_state_from_s3(event_code):
         return s
     except Exception as e:
         print(f"[STATE] S3 load error: {e}", flush=True)
+        _s3_ok = False
         return None
 
 def load_state(event_code):
@@ -295,6 +307,26 @@ def load_state(event_code):
             return s
     except Exception as e:
         print(f"[STATE] Drive load error: {e}", flush=True)
+    # 4. Rebuild from Rekognition collection (survives restarts)
+    try:
+        event = get_event(event_code)
+        if event and event.get("collection_id"):
+            cid = event["collection_id"]
+            face_ids = set()
+            paginator = rek.get_paginator("list_faces")
+            for page in paginator.paginate(CollectionId=cid):
+                for face in page.get("Faces", []):
+                    eid = face.get("ExternalImageId")
+                    if eid:
+                        face_ids.add(eid)
+            if face_ids:
+                s = {"indexed_ids": list(face_ids), "file_map": {}}
+                with open(path, "w") as f:
+                    json.dump(s, f)
+                print(f"[STATE] Rebuilt {event_code} from Rekognition ({len(face_ids)} ids)", flush=True)
+                return s
+    except Exception as e:
+        print(f"[STATE] Rekognition rebuild error: {e}", flush=True)
     return {"indexed_ids": [], "file_map": {}}
 
 def save_state(event_code, state):
