@@ -1208,7 +1208,7 @@ def _handle_whatsapp():
 
     # ── Selfie received ───────────────────────────────────────────────────────
     if num_media > 0:
-        if not media_url:
+        if not media_url and not _media_bytes_override:
             return _reply("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
 
         event_code = conv.get("event_code")
