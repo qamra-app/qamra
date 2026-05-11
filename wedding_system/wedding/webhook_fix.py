@@ -932,6 +932,15 @@ def admin_test_media():
                           mo.get("link") or mo.get("downloadUrl") or "")
                 if api_dl:
                     results["api_media_url"] = api_dl
+                    abs_dl = (BASE + api_dl) if api_dl.startswith("/") else api_dl
+                    try:
+                        r2 = requests.get(abs_dl, headers=hdrs, timeout=20)
+                        ct2 = r2.headers.get("Content-Type", "")
+                        results["api_media_download"] = {"url": abs_dl, "status": r2.status_code, "content_type": ct2, "size": len(r2.content)}
+                        if r2.status_code == 200 and len(r2.content) > 1000:
+                            results["SUCCESS"] = abs_dl
+                    except Exception as e2:
+                        results["api_media_download"] = {"url": abs_dl, "error": str(e2)}
             except Exception:
                 results["msg_lookup"] = {"status": r.status_code, "body_raw": r.text[:500]}
         except Exception as e:
