@@ -206,9 +206,43 @@ def _save_state_to_drive(event_code, data):
     except Exception as e:
         print(f"[STATE] Drive save error: {e}", flush=True)
 
+S3_BUCKET = os.environ.get("S3_BUCKET", "")
+
+def _s3_key(event_code):
+    return f"qamra_state_{event_code}.json"
+
+def _save_state_to_s3(event_code, data):
+    if not S3_BUCKET:
+        return
+    try:
+        s3 = boto3.client("s3", region_name=AWS_REGION,
+                          aws_access_key_id=AWS_ACCESS_KEY_ID,
+                          aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+        s3.put_object(Bucket=S3_BUCKET, Key=_s3_key(event_code),
+                      Body=json.dumps(data, ensure_ascii=False).encode(),
+                      ContentType="application/json")
+        print(f"[STATE] Saved {event_code} to S3 ({len(data.get('indexed_ids',[]))} ids)", flush=True)
+    except Exception as e:
+        print(f"[STATE] S3 save error: {e}", flush=True)
+
+def _load_state_from_s3(event_code):
+    if not S3_BUCKET:
+        return None
+    try:
+        s3  = boto3.client("s3", region_name=AWS_REGION,
+                           aws_access_key_id=AWS_ACCESS_KEY_ID,
+                           aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=_s3_key(event_code))
+        s   = json.loads(obj["Body"].read())
+        print(f"[STATE] Loaded {event_code} from S3 ({len(s.get('indexed_ids',[]))} ids)", flush=True)
+        return s
+    except Exception as e:
+        print(f"[STATE] S3 load error: {e}", flush=True)
+        return None
+
 def load_state(event_code):
     path = _state_file(event_code)
-    # Try local /tmp first
+    # 1. local /tmp
     try:
         with open(path) as f:
             s = json.load(f)
@@ -216,7 +250,13 @@ def load_state(event_code):
                 return s
     except Exception:
         pass
-    # Fallback: load from Drive
+    # 2. S3
+    s = _load_state_from_s3(event_code)
+    if s is not None:
+        with open(path, "w") as f:
+            json.dump(s, f)
+        return s
+    # 3. Drive (legacy)
     try:
         name = _state_drive_name(event_code)
         svc  = _drive()
@@ -230,7 +270,7 @@ def load_state(event_code):
             s   = json.loads(raw)
             with open(path, "w") as f:
                 json.dump(s, f)
-            print(f"[STATE] Loaded {event_code} state from Drive ({len(s.get('indexed_ids',[]))} ids)", flush=True)
+            print(f"[STATE] Loaded {event_code} from Drive ({len(s.get('indexed_ids',[]))} ids)", flush=True)
             return s
     except Exception as e:
         print(f"[STATE] Drive load error: {e}", flush=True)
@@ -239,6 +279,7 @@ def load_state(event_code):
 def save_state(event_code, state):
     with open(_state_file(event_code), "w") as f:
         json.dump(state, f)
+    threading.Thread(target=_save_state_to_s3,   args=(event_code, state.copy()), daemon=True).start()
     threading.Thread(target=_save_state_to_drive, args=(event_code, state.copy()), daemon=True).start()
 
 # ── Conversation state ────────────────────────────────────────────────────────
@@ -480,8 +521,9 @@ def search_and_send(selfie_bytes, sender, event_code):
     print(f"[SEARCH] indexed={len(state.get('indexed_ids',[]))} collection={event.get('collection_id')}", flush=True)
 
     if not state.get("indexed_ids"):
-        send_msg(sender, "⏳ الصور لم تُفهرس بعد — تواصل مع المنظم")
-        return
+        # State lost on restart — Rekognition collection may still have data.
+        # Try searching anyway; if collection is empty it returns 0 matches.
+        print(f"[SEARCH] local state empty, attempting Rekognition search anyway", flush=True)
 
     matches = search_by_selfie(selfie_bytes, event["collection_id"])
     print(f"[SEARCH] rekognition matches={len(matches) if matches else 0}", flush=True)
