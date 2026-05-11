@@ -1113,12 +1113,21 @@ def _handle_whatsapp():
             selfie_bytes = _media_bytes_override
         else:
             selfie_bytes = None
-            try:
-                r = requests.get(media_url, timeout=20, allow_redirects=True)
-                if r.status_code == 200:
-                    selfie_bytes = r.content
-            except Exception as e:
-                print(f"[SELFIE] download error: {e}", flush=True)
+            auth_hdrs = {"Authorization": WASSENGER_API_KEY} if WASSENGER_API_KEY else {}
+            for attempt_url in ([media_url] if media_url else []):
+                try:
+                    r = requests.get(attempt_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
+                    print(f"[SELFIE] url download status={r.status_code} size={len(r.content)}", flush=True)
+                    if r.status_code == 200 and len(r.content) > 500:
+                        selfie_bytes = r.content
+                        break
+                    # retry without auth in case it's a public CDN URL
+                    r2 = requests.get(attempt_url, timeout=20, allow_redirects=True)
+                    if r2.status_code == 200 and len(r2.content) > 500:
+                        selfie_bytes = r2.content
+                        break
+                except Exception as e:
+                    print(f"[SELFIE] download error: {e}", flush=True)
 
         if not selfie_bytes:
             return _reply("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
