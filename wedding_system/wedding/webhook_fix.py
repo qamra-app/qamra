@@ -1042,11 +1042,13 @@ def _handle_whatsapp():
     if data.get("event") != "message:in:new":
         return "", 200
     msg_data  = data.get("data", {})
-    print(f"[WH] keys={list(msg_data.keys())[:10]} phone={msg_data.get('phone')} from={msg_data.get('from')} sender={msg_data.get('sender')}", flush=True)
+    print(f"[WH] keys={list(msg_data.keys())[:15]}", flush=True)
+    print(f"[WH] hasMedia={msg_data.get('hasMedia')} media={msg_data.get('media')} body={str(msg_data.get('body',''))[:80]}", flush=True)
     sender    = msg_data.get("phone") or msg_data.get("from") or msg_data.get("sender") or ""
     body_text = (msg_data.get("body") or "").strip()
     has_media = msg_data.get("hasMedia", False)
     media_url = (msg_data.get("media") or {}).get("url", "")
+    print(f"[WH] sender={sender} has_media={has_media} media_url={media_url!r}", flush=True)
     num_media = 1 if has_media and media_url else 0
 
     def _reply(text, murl=None):
@@ -1082,12 +1084,14 @@ def _handle_whatsapp():
                 return _reply("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
 
         selfie_bytes = None
+        print(f"[SELFIE] downloading from {media_url!r}", flush=True)
         try:
             r = requests.get(media_url, timeout=20, allow_redirects=True)
+            print(f"[SELFIE] download status={r.status_code} size={len(r.content)}", flush=True)
             if r.status_code == 200:
                 selfie_bytes = r.content
         except Exception as e:
-            print(f"[DOWNLOAD] error: {e}", flush=True)
+            print(f"[SELFIE] download error: {e}", flush=True)
 
         if not selfie_bytes:
             return _reply("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
