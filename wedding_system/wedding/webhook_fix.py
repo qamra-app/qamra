@@ -901,6 +901,39 @@ def admin_last_webhook():
         return jsonify({"error": "Unauthorized"}), 401
     return jsonify(_last_webhook), 200
 
+@app.route("/admin/test-media", methods=["GET"])
+def admin_test_media():
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    msg_data  = _last_webhook.get("data", {})
+    msg_id    = msg_data.get("id") or ""
+    device_id = _last_webhook.get("device", {}).get("id") or ""
+    msg_link  = (msg_data.get("links") or {}).get("message") or ""
+    media_obj = msg_data.get("media") or {}
+    media_status = media_obj.get("status", "")
+    results = {"msg_id": msg_id, "device_id": device_id, "msg_link": msg_link, "media_status": media_status}
+    if not WASSENGER_API_KEY or not msg_id:
+        return jsonify({"error": "No API key or no message cached", **results}), 400
+    hdrs = {"Authorization": WASSENGER_API_KEY}
+    BASE = "https://api.wassenger.com"
+    paths_to_try = []
+    if msg_link:
+        paths_to_try.append(f"{msg_link}/download")
+    if device_id and msg_id:
+        paths_to_try.append(f"/v1/devices/{device_id}/messages/{msg_id}/download")
+    paths_to_try.append(f"/v1/messages/{msg_id}/download")
+    for p in paths_to_try:
+        try:
+            r = requests.get(f"{BASE}{p}", headers=hdrs, timeout=15)
+            ct = r.headers.get("Content-Type", "")
+            results[p] = {"status": r.status_code, "content_type": ct, "size": len(r.content)}
+            if r.status_code == 200 and len(r.content) > 1000:
+                results["SUCCESS"] = p
+                break
+        except Exception as e:
+            results[p] = {"error": str(e)}
+    return jsonify(results), 200
+
 @app.route("/admin/drive-folders", methods=["GET"])
 def admin_drive_folders():
     if not _check_admin():
