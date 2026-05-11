@@ -88,6 +88,9 @@ def download_file(file_id):
         _, done = dl.next_chunk()
     return buf.getvalue()
 
+# ── Last webhook debug cache ──────────────────────────────────────────────────
+_last_webhook = {}
+
 # ── Events registry ───────────────────────────────────────────────────────────
 # Structure: { "event_code": { "name", "collection_id", "gdrive_folder_id" }, ... }
 _events      = {}
@@ -860,6 +863,12 @@ document.getElementById('addForm').addEventListener('submit', async e => {{
 </script>
 </body></html>""", 200, {"Content-Type": "text/html; charset=utf-8"}
 
+@app.route("/admin/last-webhook", methods=["GET"])
+def admin_last_webhook():
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(_last_webhook), 200
+
 @app.route("/admin/drive-folders", methods=["GET"])
 def admin_drive_folders():
     if not _check_admin():
@@ -1123,21 +1132,28 @@ def whatsapp_webhook():
 
 def _handle_whatsapp():
     data      = request.get_json(silent=True) or {}
+    # Cache last webhook for diagnostics
+    global _last_webhook
+    _last_webhook = data
     if data.get("event") != "message:in:new":
         return "", 200
     msg_data  = data.get("data", {})
     sender    = (msg_data.get("fromNumber") or msg_data.get("phone") or
                  msg_data.get("from") or msg_data.get("sender") or "").replace("+", "")
     body_text = (msg_data.get("body") or "").strip()
-    msg_type  = msg_data.get("type", "")
-    has_media = msg_type in ("image", "video", "audio", "document", "sticker") or msg_data.get("hasMedia", False)
-    print(f"[WH_FULL] {json.dumps({k:v for k,v in msg_data.items() if k not in ('thumbnail','body') or v})[:1200]}", flush=True)
-    msg_id    = msg_data.get("id") or msg_data.get("_id") or ""
-    waba_id   = msg_data.get("wabaId") or ""
-    media_obj = msg_data.get("media") or {}
-    media_url = media_obj.get("url") or media_obj.get("link") or ""
-    media_wid = media_obj.get("id") or media_obj.get("_id") or ""
-    print(f"[MEDIA] msg_id={msg_id!r} waba_id={waba_id!r} media_wid={media_wid!r} media_url={media_url!r}", flush=True)
+    msg_type  = (msg_data.get("type") or msg_data.get("messageType") or "").lower()
+    has_media = (msg_type in ("image", "video", "audio", "document", "sticker", "photo")
+                 or msg_data.get("hasMedia") or msg_data.get("isMedia")
+                 or bool(msg_data.get("media")) or bool(msg_data.get("attachment")))
+    print(f"[WH_FULL] {json.dumps({k:v for k,v in msg_data.items() if k not in ('thumbnail',) or v})[:1500]}", flush=True)
+    msg_id    = msg_data.get("id") or msg_data.get("_id") or msg_data.get("messageId") or ""
+    waba_id   = msg_data.get("wabaId") or msg_data.get("wamid") or ""
+    media_obj = msg_data.get("media") or msg_data.get("attachment") or {}
+    media_url = (media_obj.get("url") or media_obj.get("link") or
+                 media_obj.get("mediaUrl") or media_obj.get("downloadUrl") or "")
+    media_wid = (media_obj.get("id") or media_obj.get("_id") or
+                 media_obj.get("mediaId") or "")
+    print(f"[MEDIA] msg_id={msg_id!r} waba_id={waba_id!r} media_wid={media_wid!r} media_url={media_url!r} has_media={has_media}", flush=True)
     _media_bytes_override = None
     if has_media and WASSENGER_API_KEY:
         hdrs = {"Authorization": WASSENGER_API_KEY}
