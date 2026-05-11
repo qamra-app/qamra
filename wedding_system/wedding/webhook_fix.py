@@ -1029,7 +1029,7 @@ def event_landing(code):
 </html>"""
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
-@app.route("/whatsapp", methods=["POST"])
+@app.route("/whatsapp", methods=["POST"], strict_slashes=False)
 def whatsapp_webhook():
     try:
         return _handle_whatsapp()
