@@ -209,7 +209,7 @@ def _save_state_to_drive(event_code, data):
     except Exception as e:
         print(f"[STATE] Drive save error: {e}", flush=True)
 
-S3_BUCKET = os.environ.get("S3_BUCKET", "")
+S3_BUCKET = os.environ.get("S3_BUCKET", "qamra-state-backup")
 
 def _s3_key(event_code):
     return f"qamra_state_{event_code}.json"
