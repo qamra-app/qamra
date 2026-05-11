@@ -955,9 +955,7 @@ def event_landing(code):
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     data      = request.get_json(silent=True) or {}
-    print(f"[WEBHOOK] raw payload: {json.dumps(data)[:500]}", flush=True)
     if data.get("event") != "message:in:new":
-        print(f"[WEBHOOK] ignored event: {data.get('event')}", flush=True)
         return "", 200
     msg_data  = data.get("data", {})
     sender    = msg_data.get("phone", "")
@@ -965,7 +963,6 @@ def whatsapp_webhook():
     has_media = msg_data.get("hasMedia", False)
     media_url = (msg_data.get("media") or {}).get("url", "")
     num_media = 1 if has_media and media_url else 0
-    print(f"[WEBHOOK] sender={sender} body={body_text!r} has_media={has_media}", flush=True)
 
     def _reply(text, murl=None):
         send_msg(sender, text, media_url=murl)
@@ -1106,7 +1103,7 @@ def whatsapp_webhook():
     if state == "awaiting_inquiry":
         _clear_conv(sender)
         clean_sender = sender.replace("whatsapp:", "")
-        send_msg(OWNER_WHATSAPP, f"📩 استفسار جديد\nمن: {clean_sender}\n\n{body_text}")
+        send_msg(f"+{OWNER_PHONE}", f"📩 استفسار جديد\nمن: {clean_sender}\n\n{body_text}")
         return _reply("شكراً! تم إيصال استفسارك وسيتواصل معك فريقنا قريباً 🌙")
 
     # Fallback
