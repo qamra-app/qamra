@@ -859,6 +859,33 @@ def admin_delete_event(code):
         save_events()
     return jsonify({"status": "deleted", "event": code}), 200
 
+@app.route("/admin/wassenger", methods=["GET"])
+def admin_wassenger():
+    token = request.args.get("token", "")
+    if token != ADMIN_TOKEN:
+        return jsonify({"error": "unauthorized"}), 401
+    headers = {"Authorization": WASSENGER_API_KEY, "Content-Type": "application/json"}
+    try:
+        devices_r = requests.get("https://api.wassenger.com/v1/devices", headers=headers, timeout=15)
+        devices = devices_r.json()
+        if not devices or not isinstance(devices, list):
+            return jsonify({"error": "no devices", "raw": devices}), 200
+        device = devices[0]
+        device_id = device.get("id") or device.get("_id")
+        hooks_r = requests.get(f"https://api.wassenger.com/v1/devices/{device_id}/webhooks",
+                               headers=headers, timeout=15)
+        return jsonify({
+            "device_id": device_id,
+            "alias": device.get("alias"),
+            "healthy": device.get("healthy"),
+            "status": device.get("status"),
+            "sendMessageStatus": device.get("sendMessageStatus"),
+            "connector": device.get("connector"),
+            "webhooks": hooks_r.json(),
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ── WhatsApp webhook ──────────────────────────────────────────────────────────
 @app.route("/event/<code>", methods=["GET"])
 def event_landing(code):
