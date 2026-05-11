@@ -872,8 +872,18 @@ def admin_wassenger():
             return jsonify({"error": "no devices", "raw": devices}), 200
         device = devices[0]
         device_id = device.get("id") or device.get("_id")
-        hooks_r = requests.get(f"https://api.wassenger.com/v1/devices/{device_id}/webhooks",
-                               headers=headers, timeout=15)
+
+        # Try multiple webhook endpoint paths to find the right one for cloud connector
+        webhook_paths = [
+            f"https://api.wassenger.com/v1/devices/{device_id}/webhooks",
+            f"https://api.wassenger.com/v1/webhooks",
+            f"https://api.wassenger.com/v1/account/webhooks",
+        ]
+        webhooks_results = {}
+        for path in webhook_paths:
+            r = requests.get(path, headers=headers, timeout=10)
+            webhooks_results[path] = {"status": r.status_code, "body": r.json()}
+
         return jsonify({
             "device_id": device_id,
             "alias": device.get("alias"),
@@ -881,8 +891,48 @@ def admin_wassenger():
             "status": device.get("status"),
             "sendMessageStatus": device.get("sendMessageStatus"),
             "connector": device.get("connector"),
-            "webhooks": hooks_r.json(),
+            "webhook_probe": webhooks_results,
         }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/admin/wassenger/reset-webhook", methods=["POST"])
+def admin_reset_webhook():
+    token = request.args.get("token", "")
+    if token != ADMIN_TOKEN:
+        return jsonify({"error": "unauthorized"}), 401
+    headers = {"Authorization": WASSENGER_API_KEY, "Content-Type": "application/json"}
+    webhook_url = f"{APP_URL}/whatsapp"
+    results = {}
+    try:
+        devices = requests.get("https://api.wassenger.com/v1/devices", headers=headers, timeout=15).json()
+        device_id = (devices[0].get("id") or devices[0].get("_id")) if devices else None
+        if not device_id:
+            return jsonify({"error": "no device"}), 500
+
+        # Try to list existing hooks from all known paths
+        for path in [
+            f"https://api.wassenger.com/v1/devices/{device_id}/webhooks",
+            "https://api.wassenger.com/v1/webhooks",
+        ]:
+            list_r = requests.get(path, headers=headers, timeout=10)
+            if list_r.status_code == 200:
+                hooks = list_r.json() if isinstance(list_r.json(), list) else []
+                for h in hooks:
+                    hid = h.get("id") or h.get("_id")
+                    if hid:
+                        del_r = requests.delete(f"{path}/{hid}", headers=headers, timeout=10)
+                        results[f"deleted_{hid}"] = del_r.status_code
+
+                create_r = requests.post(path, json={
+                    "url": webhook_url,
+                    "events": ["message:in:new"],
+                    "enabled": True,
+                }, headers=headers, timeout=10)
+                results["created"] = {"status": create_r.status_code, "body": create_r.json()}
+                return jsonify(results), 200
+
+        return jsonify({"error": "no working webhook endpoint found", "tried": results}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
