@@ -1046,27 +1046,36 @@ def _handle_whatsapp():
     body_text = (msg_data.get("body") or "").strip()
     has_media = msg_data.get("hasMedia", False)
     msg_id    = msg_data.get("id") or msg_data.get("_id") or ""
-    # Cloud API connector does not embed media URL in webhook — fetch via API
-    media_url = (msg_data.get("media") or {}).get("url", "")
-    if has_media and not media_url and msg_id and WASSENGER_API_KEY:
-        try:
-            mresp = requests.get(
-                f"https://api.wassenger.com/v1/messages/{msg_id}/media",
-                headers={"Authorization": WASSENGER_API_KEY},
-                timeout=20,
-            )
-            print(f"[MEDIA] fetch status={mresp.status_code} size={len(mresp.content)}", flush=True)
-            if mresp.status_code == 200 and mresp.content:
-                # Return raw bytes directly — skip URL-based download
-                _media_bytes_override = mresp.content
-            else:
-                _media_bytes_override = None
-        except Exception as e:
-            print(f"[MEDIA] fetch error: {e}", flush=True)
-            _media_bytes_override = None
-    else:
-        _media_bytes_override = None
+    # Cloud API connector may not embed media URL — resolve via API
+    media_obj = msg_data.get("media") or {}
+    media_url = media_obj.get("url") or media_obj.get("link") or ""
+    _media_bytes_override = None
+    if has_media and WASSENGER_API_KEY:
+        hdrs = {"Authorization": WASSENGER_API_KEY}
+        # Try fetching full message to get resolved media URL
+        if not media_url and msg_id:
+            try:
+                full = requests.get(f"https://api.wassenger.com/v1/messages/{msg_id}",
+                                    headers=hdrs, timeout=15).json()
+                media_url = ((full.get("media") or {}).get("url") or
+                             (full.get("media") or {}).get("link") or "")
+                print(f"[MEDIA] resolved url={media_url!r}", flush=True)
+            except Exception as e:
+                print(f"[MEDIA] resolve error: {e}", flush=True)
+        # If still no URL, download binary directly
+        if not media_url and msg_id:
+            for path in [f"/v1/messages/{msg_id}/download", f"/v1/messages/{msg_id}/media"]:
+                try:
+                    r = requests.get(f"https://api.wassenger.com{path}",
+                                     headers=hdrs, timeout=20)
+                    print(f"[MEDIA] {path} status={r.status_code} size={len(r.content)}", flush=True)
+                    if r.status_code == 200 and len(r.content) > 1000:
+                        _media_bytes_override = r.content
+                        break
+                except Exception as e:
+                    print(f"[MEDIA] {path} error: {e}", flush=True)
     num_media = 1 if has_media and (media_url or _media_bytes_override) else 0
+    print(f"[WH] sender={sender} has_media={has_media} num_media={num_media} media_url={media_url!r}", flush=True)
 
     def _reply(text, murl=None):
         send_msg(sender, text, media_url=murl)
