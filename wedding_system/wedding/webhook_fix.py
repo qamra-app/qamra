@@ -1255,54 +1255,65 @@ def _handle_whatsapp():
     if has_media and WASSENGER_API_KEY:
         hdrs = {"Authorization": WASSENGER_API_KEY}
         BASE = "https://api.wassenger.com"
-        # Step 1: try to get media URL from full message lookup using correct chat endpoint
+
+        def _abs(url):
+            return (BASE + url) if url and url.startswith("/") else url
+
+        # Step 1: message lookup to find the real download URL
+        # The webhook has media.id=null and media.links.download=null,
+        # but the API response has media.id and media.links.download populated.
         if not media_url:
             lookups = []
             if msg_link:
-                lookups.append(msg_link)                                          # /v1/chat/{dev}/messages/{id}
+                lookups.append(msg_link)           # /v1/chat/{dev}/messages/{id}
             if device_id and msg_id:
                 lookups.append(f"/v1/devices/{device_id}/messages/{msg_id}")
-            lookups += [f"/v1/messages/{msg_id}", f"/v1/messages/{waba_id}"]
+            lookups += [f"/v1/messages/{msg_id}"]
             for lookup in lookups:
                 if lookup and not lookup.endswith("/"):
                     try:
                         r = requests.get(f"{BASE}{lookup}", headers=hdrs, timeout=15)
-                        print(f"[MEDIA] GET {lookup} => {r.status_code} body={r.text[:300]}", flush=True)
+                        print(f"[MEDIA] GET {lookup} => {r.status_code}", flush=True)
                         if r.status_code == 200:
                             d = r.json()
                             mo = d.get("media") or {}
-                            media_url = (mo.get("url") or mo.get("link") or
-                                         (mo.get("links") or {}).get("download") or "")
-                            if media_url:
+                            # The key field: media.links.download is the correct download path
+                            dl = ((mo.get("links") or {}).get("download") or
+                                  mo.get("url") or mo.get("link") or
+                                  mo.get("downloadUrl") or "")
+                            if dl:
+                                media_url = _abs(dl)
+                                print(f"[MEDIA] found download URL: {media_url}", flush=True)
                                 break
+                            # Also capture media.id for fallback
+                            if not media_wid:
+                                media_wid = mo.get("id") or ""
                     except Exception as e:
                         print(f"[MEDIA] GET {lookup} error: {e}", flush=True)
-        # Step 2: try direct binary download using correct chat endpoint
-        if not media_url and not _media_bytes_override:
-            dl_paths = []
-            if msg_link:
-                dl_paths.append(f"{msg_link}/download")
-            if device_id and msg_id:
-                dl_paths.append(f"/v1/devices/{device_id}/messages/{msg_id}/download")
-            dl_paths += [
-                f"/v1/messages/{msg_id}/download",
-                f"/v1/messages/{msg_id}/media",
-                f"/v1/files/{media_wid}",
-            ]
-            for path in dl_paths:
-                if not path.endswith("/"):
-                    try:
-                        r = requests.get(f"{BASE}{path}", headers=hdrs, timeout=20)
-                        ct = r.headers.get("Content-Type", "")
-                        print(f"[MEDIA] GET {path} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
-                        if r.status_code == 200 and "image" in ct and len(r.content) > 1000:
-                            _media_bytes_override = r.content
-                            break
-                        elif r.status_code == 200 and len(r.content) > 5000:
-                            _media_bytes_override = r.content
-                            break
-                    except Exception as e:
-                        print(f"[MEDIA] GET {path} error: {e}", flush=True)
+
+        # Step 2: if we have a URL now, download the binary directly
+        if media_url and not _media_bytes_override:
+            try:
+                r = requests.get(media_url, headers=hdrs, timeout=30, allow_redirects=True)
+                ct = r.headers.get("Content-Type", "")
+                print(f"[MEDIA] download {media_url} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
+                if r.status_code == 200 and len(r.content) > 500:
+                    _media_bytes_override = r.content
+                    media_url = ""  # will use bytes directly
+            except Exception as e:
+                print(f"[MEDIA] download error: {e}", flush=True)
+
+        # Step 3: last resort — try files endpoint if media_wid available
+        if not _media_bytes_override and media_wid and device_id:
+            fallback = f"{BASE}/v1/chat/{device_id}/files/{media_wid}/download"
+            try:
+                r = requests.get(fallback, headers=hdrs, timeout=20)
+                ct = r.headers.get("Content-Type", "")
+                print(f"[MEDIA] fallback {fallback} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
+                if r.status_code == 200 and len(r.content) > 500:
+                    _media_bytes_override = r.content
+            except Exception as e:
+                print(f"[MEDIA] fallback error: {e}", flush=True)
     num_media = 1 if has_media and (media_url or _media_bytes_override) else 0
     print(f"[WH] sender={sender} type={msg_type} has_media={has_media} num_media={num_media} media_url={media_url!r}", flush=True)
 
