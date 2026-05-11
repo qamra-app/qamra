@@ -1031,6 +1031,13 @@ def event_landing(code):
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
+    try:
+        return _handle_whatsapp()
+    except Exception as exc:
+        print(f"[WH] unhandled error: {exc}", flush=True)
+        return "", 200
+
+def _handle_whatsapp():
     data      = request.get_json(silent=True) or {}
     if data.get("event") != "message:in:new":
         return "", 200
