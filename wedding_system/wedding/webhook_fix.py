@@ -1447,11 +1447,21 @@ def _handle_whatsapp():
 
     if state == "new":
         _set_conv(sender, "routing")
-        send_buttons(sender,
-            "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
-            ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
+        # If the message is already a valid menu selection, skip the greeting
+        # and fall through directly to the routing handler below.
+        # This prevents returning users from having to press 1/2 twice.
+        _already_selected = (
+            body_text in ("1", "١", "📸 ابحث عن صوري", "2", "٢", "💬 استفسار وتواصل")
+            or any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل", "ابحث",
+                                             "استفسار", "سؤال", "تواصل"))
         )
-        return "", 200
+        if not _already_selected:
+            send_buttons(sender,
+                "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
+                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
+            )
+            return "", 200
+        state = "routing"  # fall through
 
     if state == "routing":
         picked_photos  = body_text in ("1", "١", "📸 ابحث عن صوري") or \
