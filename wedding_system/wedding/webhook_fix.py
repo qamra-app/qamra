@@ -63,6 +63,61 @@ def send_msg(to, body, media_url=None):
     except Exception as e:
         print(f"[WASSENGER] Send error to {to}: {e}", flush=True)
 
+
+def send_buttons(to, body, buttons):
+    """Send WhatsApp interactive button message (max 3). Falls back to numbered text."""
+    payload = {
+        "phone": to,
+        "message": body,
+        "buttons": [{"text": b} for b in buttons[:3]],
+    }
+    try:
+        r = requests.post(WASSENGER_API_URL, json=payload,
+                          headers={"Authorization": WASSENGER_API_KEY,
+                                   "Content-Type": "application/json"},
+                          timeout=20)
+        if r.status_code in (200, 201):
+            return
+        # If Wassenger rejected buttons, fall through to plain text
+        print(f"[BUTTONS] Fell back to text (status {r.status_code})", flush=True)
+    except Exception as e:
+        print(f"[BUTTONS] Error: {e}", flush=True)
+    # Fallback: numbered plain-text list
+    numbered = "\n".join(f"*{i+1}* — {b}" for i, b in enumerate(buttons))
+    send_msg(to, f"{body}\n\n{numbered}")
+
+
+# ── Human agent session tracking ──────────────────────────────────────────────
+# Maps user_phone → { "owner": owner_phone, "ts": float }
+_agent_sessions: dict = {}
+_AGENT_TTL = 7200  # 2 hours
+
+
+def _get_agent_session(user_phone):
+    s = _agent_sessions.get(user_phone)
+    if s and (time.time() - s["ts"]) < _AGENT_TTL:
+        return s
+    _agent_sessions.pop(user_phone, None)
+    return None
+
+
+def _start_agent_session(user_phone, owner_phone):
+    _agent_sessions[user_phone] = {"owner": owner_phone, "ts": time.time()}
+
+
+def _end_agent_session(user_phone):
+    _agent_sessions.pop(user_phone, None)
+
+
+def _find_user_for_owner(owner_phone):
+    """Return the user_phone currently connected to this owner, or None."""
+    now = time.time()
+    for user, s in list(_agent_sessions.items()):
+        if s["owner"] == owner_phone and (now - s["ts"]) < _AGENT_TTL:
+            return user
+    return None
+
+
 rek = boto3.client(
     "rekognition",
     region_name=AWS_REGION,
@@ -130,7 +185,6 @@ def _save_events_to_drive(data):
 
 def load_events():
     global _events
-    # Try local file first
     if os.path.exists(EVENTS_FILE):
         try:
             with open(EVENTS_FILE) as f:
@@ -139,7 +193,6 @@ def load_events():
             return
         except Exception:
             pass
-    # Fallback: load from Drive
     try:
         fid = _events_drive_file_id()
         if fid:
@@ -239,7 +292,7 @@ def _ensure_s3_bucket():
         print(f"[S3] Bucket {S3_BUCKET} created", flush=True)
     except Exception as e:
         if "BucketAlreadyOwnedByYou" in str(e) or "BucketAlreadyExists" in str(e):
-            pass  # already exists
+            pass
         else:
             print(f"[S3] Bucket ensure error: {e}", flush=True)
             _s3_ok = False
@@ -275,7 +328,6 @@ def _load_state_from_s3(event_code):
 
 def load_state(event_code):
     path = _state_file(event_code)
-    # 1. local /tmp
     try:
         with open(path) as f:
             s = json.load(f)
@@ -283,13 +335,11 @@ def load_state(event_code):
                 return s
     except Exception:
         pass
-    # 2. S3
     s = _load_state_from_s3(event_code)
     if s is not None:
         with open(path, "w") as f:
             json.dump(s, f)
         return s
-    # 3. Drive (legacy)
     try:
         name = _state_drive_name(event_code)
         svc  = _drive()
@@ -307,7 +357,6 @@ def load_state(event_code):
             return s
     except Exception as e:
         print(f"[STATE] Drive load error: {e}", flush=True)
-    # 4. Rebuild from Rekognition collection (survives restarts)
     try:
         event = get_event(event_code)
         if event and event.get("collection_id"):
@@ -508,7 +557,7 @@ def run_index(event_code):
 
 # ── Auto-index all events ─────────────────────────────────────────────────────
 def _auto_index_loop():
-    time.sleep(5)  # wait for startup
+    time.sleep(5)
     while True:
         with _events_lock:
             codes = list(_events.keys())
@@ -517,7 +566,7 @@ def _auto_index_loop():
                 run_index(code)
             except Exception as e:
                 print(f"[AUTO-INDEX] {code} error: {e}", flush=True)
-        time.sleep(30)  # re-check every 30 seconds for live events
+        time.sleep(30)
 
 threading.Thread(target=_auto_index_loop, daemon=True).start()
 
@@ -534,7 +583,6 @@ def create_guest_folder(sender_label, file_ids, event_name):
         body={"type": "anyone", "role": "reader"},
     ).execute()
 
-    # Create shortcuts in batches of 100 (Drive batch API limit)
     errors = []
     def _batch_cb(request_id, response, exception):
         if exception:
@@ -574,8 +622,6 @@ def search_and_send(selfie_bytes, sender, event_code):
     print(f"[SEARCH] indexed={len(state.get('indexed_ids',[]))} collection={event.get('collection_id')}", flush=True)
 
     if not state.get("indexed_ids"):
-        # State lost on restart — Rekognition collection may still have data.
-        # Try searching anyway; if collection is empty it returns 0 matches.
         print(f"[SEARCH] local state empty, attempting Rekognition search anyway", flush=True)
 
     matches = search_by_selfie(selfie_bytes, event["collection_id"])
@@ -593,7 +639,6 @@ def search_and_send(selfie_bytes, sender, event_code):
 
     count = len(file_ids)
 
-    # Build guest folder first, then send one message with the link — fast and RAM-safe
     try:
         phone_label = sender.replace("whatsapp:", "").replace("+", "")
         folder_link = create_guest_folder(phone_label, file_ids, event["name"])
@@ -653,7 +698,6 @@ def match_api():
     phone      = request.form.get("phone", "").strip()
     event      = get_event(event_code)
 
-    # Auto-select if no event code provided
     if not event:
         todays = get_todays_events()
         if len(todays) == 1:
@@ -703,7 +747,6 @@ def match_api():
             "drive_link": entry.get("link", ""),
         })
 
-    # Build personal folder in background
     session_id = hashlib.md5(f"{time.time()}{phone}".encode()).hexdigest()[:16]
     _folder_cache[session_id] = None
 
@@ -835,7 +878,6 @@ input:focus{{border-color:#C9A96E}}
 </div>
 
 <script>
-// Load Drive folders
 (async () => {{
   try {{
     const r = await fetch('/admin/drive-folders?token={token}');
@@ -889,7 +931,6 @@ def admin_test_media():
     if not _check_admin():
         return jsonify({"error": "Unauthorized"}), 401
     msg_data  = _last_webhook.get("data", {})
-    # Allow overriding from query params for testing
     msg_id    = request.args.get("msg_id") or msg_data.get("id") or ""
     device_id = request.args.get("device_id") or _last_webhook.get("device", {}).get("id") or ""
     msg_link  = request.args.get("msg_link") or (msg_data.get("links") or {}).get("message") or ""
@@ -902,14 +943,12 @@ def admin_test_media():
         return jsonify({"error": "No message cached — send a selfie first then retry", **results}), 400
     hdrs = {"Authorization": WASSENGER_API_KEY}
     BASE = "https://api.wassenger.com"
-    # First do a message lookup to see full API response and any download URL
     if msg_link:
         try:
             r = requests.get(f"{BASE}{msg_link}", headers=hdrs, timeout=15)
             try:
                 body = r.json()
                 results["msg_lookup"] = {"status": r.status_code, "body": body}
-                # Extract any media URLs from the full API response
                 mo = body.get("media") or {}
                 api_dl = (mo.get("url") or (mo.get("links") or {}).get("download") or
                           mo.get("link") or mo.get("downloadUrl") or "")
@@ -928,7 +967,6 @@ def admin_test_media():
                 results["msg_lookup"] = {"status": r.status_code, "body_raw": r.text[:500]}
         except Exception as e:
             results["msg_lookup"] = {"error": str(e)}
-    # Try download paths
     paths_to_try = []
     if msg_link:
         paths_to_try.append(f"{msg_link}/download")
@@ -984,18 +1022,6 @@ def admin_list_events():
 
 @app.route("/admin/event", methods=["POST"])
 def admin_add_event():
-    """
-    Register a new wedding event.
-    POST JSON: {
-      "code": "AHMED2026",
-      "name": "حفل أحمد ومريم",
-      "collection_id": "qamra-ahmed2026",
-      "gdrive_folder_id": "1ABC...",
-      "drive_url": "https://drive.google.com/drive/folders/...",  (optional — public album link)
-      "kiosk_url": "http://192.168.1.10:5000?event=AHMED2026"     (optional — local kiosk URL)
-    }
-    Header: X-Admin-Token: <token>
-    """
     if not _check_admin():
         return jsonify({"error": "Unauthorized"}), 401
     data = request.json or {}
@@ -1012,7 +1038,7 @@ def admin_add_event():
             "gdrive_folder_id": data["gdrive_folder_id"],
             "drive_url":        data.get("drive_url", ""),
             "kiosk_url":        data.get("kiosk_url", ""),
-            "date":             data.get("date", ""),   # YYYY-MM-DD
+            "date":             data.get("date", ""),
         }
         save_events()
 
@@ -1052,7 +1078,6 @@ def admin_wassenger():
         device = devices[0]
         device_id = device.get("id") or device.get("_id")
 
-        # Try multiple webhook endpoint paths to find the right one for cloud connector
         webhook_paths = [
             f"https://api.wassenger.com/v1/devices/{device_id}/webhooks",
             f"https://api.wassenger.com/v1/webhooks",
@@ -1089,7 +1114,6 @@ def admin_reset_webhook():
         if not device_id:
             return jsonify({"error": "no device"}), 500
 
-        # Try to list existing hooks from all known paths
         for path in [
             f"https://api.wassenger.com/v1/devices/{device_id}/webhooks",
             "https://api.wassenger.com/v1/webhooks",
@@ -1218,7 +1242,6 @@ def whatsapp_webhook():
 
 def _handle_whatsapp():
     data      = request.get_json(silent=True) or {}
-    # Cache last webhook for diagnostics
     global _last_webhook
     _last_webhook = data
     if data.get("event") != "message:in:new":
@@ -1235,7 +1258,7 @@ def _handle_whatsapp():
     msg_id    = msg_data.get("id") or msg_data.get("_id") or msg_data.get("messageId") or ""
     waba_id   = msg_data.get("wabaId") or msg_data.get("wamid") or ""
     device_id = data.get("device", {}).get("id") or ""
-    msg_link  = (msg_data.get("links") or {}).get("message") or ""   # e.g. /v1/chat/{device_id}/messages/{id}
+    msg_link  = (msg_data.get("links") or {}).get("message") or ""
     media_obj = msg_data.get("media") or msg_data.get("attachment") or {}
     media_url = (media_obj.get("url") or media_obj.get("link") or
                  media_obj.get("mediaUrl") or media_obj.get("downloadUrl") or
@@ -1251,13 +1274,10 @@ def _handle_whatsapp():
         def _abs(url):
             return (BASE + url) if url and url.startswith("/") else url
 
-        # Step 1: message lookup to find the real download URL
-        # The webhook has media.id=null and media.links.download=null,
-        # but the API response has media.id and media.links.download populated.
         if not media_url:
             lookups = []
             if msg_link:
-                lookups.append(msg_link)           # /v1/chat/{dev}/messages/{id}
+                lookups.append(msg_link)
             if device_id and msg_id:
                 lookups.append(f"/v1/devices/{device_id}/messages/{msg_id}")
             lookups += [f"/v1/messages/{msg_id}"]
@@ -1269,7 +1289,6 @@ def _handle_whatsapp():
                         if r.status_code == 200:
                             d = r.json()
                             mo = d.get("media") or {}
-                            # The key field: media.links.download is the correct download path
                             dl = ((mo.get("links") or {}).get("download") or
                                   mo.get("url") or mo.get("link") or
                                   mo.get("downloadUrl") or "")
@@ -1277,13 +1296,11 @@ def _handle_whatsapp():
                                 media_url = _abs(dl)
                                 print(f"[MEDIA] found download URL: {media_url}", flush=True)
                                 break
-                            # Also capture media.id for fallback
                             if not media_wid:
                                 media_wid = mo.get("id") or ""
                     except Exception as e:
                         print(f"[MEDIA] GET {lookup} error: {e}", flush=True)
 
-        # Step 2: if we have a URL now, download the binary directly
         if media_url and not _media_bytes_override:
             try:
                 r = requests.get(media_url, headers=hdrs, timeout=30, allow_redirects=True)
@@ -1291,11 +1308,10 @@ def _handle_whatsapp():
                 print(f"[MEDIA] download {media_url} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
                 if r.status_code == 200 and len(r.content) > 500:
                     _media_bytes_override = r.content
-                    media_url = ""  # will use bytes directly
+                    media_url = ""
             except Exception as e:
                 print(f"[MEDIA] download error: {e}", flush=True)
 
-        # Step 3: last resort — try files endpoint if media_wid available
         if not _media_bytes_override and media_wid and device_id:
             fallback = f"{BASE}/v1/chat/{device_id}/files/{media_wid}/download"
             try:
@@ -1306,6 +1322,7 @@ def _handle_whatsapp():
                     _media_bytes_override = r.content
             except Exception as e:
                 print(f"[MEDIA] fallback error: {e}", flush=True)
+
     num_media = 1 if has_media and (media_url or _media_bytes_override) else 0
     print(f"[WH] sender={sender} type={msg_type} has_media={has_media} num_media={num_media} media_url={media_url!r}", flush=True)
 
@@ -1314,6 +1331,27 @@ def _handle_whatsapp():
         return "", 200
 
     if not sender:
+        return "", 200
+
+    # ── Owner acting as human agent ───────────────────────────────────────────
+    clean_owner = OWNER_PHONE.lstrip("+")
+    if sender == clean_owner:
+        user_phone = _find_user_for_owner(sender)
+        if user_phone:
+            if body_text.strip() == "#end":
+                _end_agent_session(user_phone)
+                _clear_conv(user_phone)
+                send_msg(user_phone,
+                    "✅ انتهت المحادثة مع فريق الدعم.\n\n"
+                    "إذا احتجت مساعدة مرة أخرى أرسل *مرحبا* 🌙"
+                )
+                return _reply("✅ تم إنهاء الجلسة.")
+            else:
+                # Forward owner reply to user
+                send_msg(user_phone, f"👤 *فريق قمرة:*\n{body_text}")
+                _agent_sessions[user_phone]["ts"] = time.time()  # renew TTL
+                return "", 200
+        # Owner not in a session — ignore (could be owner sending a selfie or testing)
         return "", 200
 
     conv  = _get_conv(sender)
@@ -1353,7 +1391,6 @@ def _handle_whatsapp():
                     if r.status_code == 200 and len(r.content) > 500:
                         selfie_bytes = r.content
                         break
-                    # retry without auth in case it's a public CDN URL
                     r2 = requests.get(attempt_url, timeout=20, allow_redirects=True)
                     if r2.status_code == 200 and len(r2.content) > 500:
                         selfie_bytes = r2.content
@@ -1403,21 +1440,26 @@ def _handle_whatsapp():
             "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من الحفل 🎉📸"
         )
 
-    if any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start")):
+    if any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start", "مرحبً")):
         _clear_conv(sender)
+        _end_agent_session(sender)
         state = "new"
 
     if state == "new":
         _set_conv(sender, "routing")
-        return _reply(
-            "🌙 أهلاً وسهلاً!\n\n"
-            "كيف أقدر أساعدك؟\n\n"
-            "رد بـ *1* — إذا كنت ضيفاً تبحث عن صورك من الحفل 📸\n"
-            "رد بـ *2* — إذا لديك استفسار عام 💬"
+        send_buttons(sender,
+            "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
+            ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
         )
+        return "", 200
 
     if state == "routing":
-        if body_text in ("1", "١") or any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل")):
+        picked_photos  = body_text in ("1", "١", "📸 ابحث عن صوري") or \
+                         any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل", "ابحث"))
+        picked_inquiry = body_text in ("2", "٢", "💬 استفسار وتواصل") or \
+                         any(w in body_text for w in ("استفسار", "سؤال", "تواصل"))
+
+        if picked_photos:
             todays = get_todays_events()
             if len(todays) == 1:
                 code, event = todays[0]
@@ -1440,11 +1482,15 @@ def _handle_whatsapp():
                 f"أرسل لي *كود الحفل* — ستجده على QR الكود في الحفل.\n\n"
                 f"الأحداث المتاحة: {codes}"
             )
-        elif body_text in ("2", "٢") or any(w in body_text for w in ("استفسار", "سؤال")):
+        elif picked_inquiry:
             _set_conv(sender, "awaiting_inquiry")
-            return _reply("بكل سرور! اكتب استفسارك وسأوصله لفريقنا 💬")
+            return _reply("بكل سرور! اكتب استفسارك وسنوصله لفريق الدعم 💬")
         else:
-            return _reply("من فضلك رد بـ *1* أو *2*.")
+            send_buttons(sender,
+                "من فضلك اختر من القائمة:",
+                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
+            )
+            return "", 200
 
     if state == "awaiting_event_code":
         return _reply(
@@ -1458,18 +1504,48 @@ def _handle_whatsapp():
         return _reply(f"📸 أرسل لي *سيلفي* لوجهك وسأجد صورك من {name}!")
 
     if state == "awaiting_inquiry":
-        _clear_conv(sender)
+        # First message → start bidirectional agent session
         clean_sender = sender.replace("whatsapp:", "")
-        send_msg(f"+{OWNER_PHONE}", f"📩 استفسار جديد\nمن: {clean_sender}\n\n{body_text}")
-        return _reply("شكراً! تم إيصال استفسارك وسيتواصل معك فريقنا قريباً 🌙")
+        owner = OWNER_PHONE.lstrip("+")
+        _start_agent_session(sender, owner)
+        _set_conv(sender, "with_agent")
+        send_msg(f"+{OWNER_PHONE}",
+            f"📩 *استفسار جديد* — الضيف: +{clean_sender}\n\n"
+            f"{body_text}\n\n"
+            "_للرد: أجب على هذه الرسالة وسيصل للضيف تلقائياً_\n"
+            "_لإنهاء المحادثة: أرسل *#end*_"
+        )
+        return _reply(
+            "✅ تم تحويلك لفريق الدعم! سيردون عليك قريباً 🌙\n\n"
+            "يمكنك الاستمرار في إرسال رسائلك."
+        )
+
+    if state == "with_agent":
+        # Forward subsequent messages to owner
+        clean_sender = sender.replace("whatsapp:", "")
+        session = _get_agent_session(sender)
+        if session:
+            send_msg(f"+{OWNER_PHONE}",
+                f"💬 *رسالة من الضيف* (+{clean_sender}):\n{body_text}"
+            )
+            return "", 200
+        else:
+            # Session expired
+            _clear_conv(sender)
+            send_buttons(sender,
+                "🌙 انتهت جلسة الدعم. كيف أقدر أساعدك؟",
+                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
+            )
+            return "", 200
 
     # Fallback
-    _set_conv(sender, "routing")
-    return _reply(
-        "🌙 أهلاً وسهلاً!\n\n"
-        "رد بـ *1* — تبحث عن صورك 📸\n"
-        "رد بـ *2* — استفسار عام 💬"
+    _clear_conv(sender)
+    send_buttons(sender,
+        "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
+        ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
     )
+    return "", 200
+
 
 def _ensure_webhook():
     """Register Wassenger inbound webhook on startup if not already present."""
