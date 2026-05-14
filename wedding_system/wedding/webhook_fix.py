@@ -1286,7 +1286,7 @@ def _handle_whatsapp():
     print(f"[WH] sender={sender} type={msg_type} has_media={has_media} media_url={media_url!r}", flush=True)
 
     def _reply(text, murl=None):
-        send_msg(sender, text, media_url=murl)
+        threading.Thread(target=send_msg, args=(sender, text), kwargs={"media_url": murl}, daemon=True).start()
         return "", 200
 
     if not sender:
@@ -1459,10 +1459,7 @@ def _handle_whatsapp():
                                              "استفسار", "سؤال", "تواصل"))
         )
         if not _already_selected:
-            send_buttons(sender,
-                "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
-                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-            )
+            threading.Thread(target=send_buttons, args=(sender, "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
             return "", 200
         state = "routing"  # fall through
 
@@ -1499,10 +1496,7 @@ def _handle_whatsapp():
             _set_conv(sender, "awaiting_inquiry")
             return _reply("بكل سرور! اكتب استفسارك وسنوصله لفريق الدعم 💬")
         else:
-            send_buttons(sender,
-                "من فضلك اختر من القائمة:",
-                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-            )
+            threading.Thread(target=send_buttons, args=(sender, "من فضلك اختر من القائمة:", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
             return "", 200
 
     if state == "awaiting_event_code":
@@ -1545,18 +1539,12 @@ def _handle_whatsapp():
         else:
             # Session expired
             _clear_conv(sender)
-            send_buttons(sender,
-                "🌙 انتهت جلسة الدعم. كيف أقدر أساعدك؟",
-                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-            )
+            threading.Thread(target=send_buttons, args=(sender, "🌙 انتهت جلسة الدعم. كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
             return "", 200
 
     # Fallback
     _clear_conv(sender)
-    send_buttons(sender,
-        "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
-        ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-    )
+    threading.Thread(target=send_buttons, args=(sender, "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
     return "", 200
 
 
