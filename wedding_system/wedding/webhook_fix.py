@@ -419,15 +419,12 @@ _folder_cache = {}  # session_id -> folder_url | None (building) | "" (failed)
 
 # ── Rekognition helpers ───────────────────────────────────────────────────────
 def resize_for_rekognition(image_bytes):
-    if len(image_bytes) <= 5 * 1024 * 1024:
-        return image_bytes
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        if img.width > 2048:
-            ratio = 2048 / img.width
-            img = img.resize((2048, int(img.height * ratio)), Image.LANCZOS)
+        if img.width > 800 or img.height > 800:
+            img.thumbnail((800, 800), Image.LANCZOS)
         out = io.BytesIO()
-        img.save(out, format="JPEG", quality=85)
+        img.save(out, format="JPEG", quality=80)
         return out.getvalue()
     except Exception as e:
         print(f"[RESIZE] {e}", flush=True)
@@ -577,6 +574,18 @@ def _auto_index_loop():
         time.sleep(30)
 
 threading.Thread(target=_auto_index_loop, daemon=True).start()
+
+# ── Keep-alive: ping self every 4 min to prevent Railway cold starts ──────────
+def _keepalive_loop():
+    time.sleep(60)
+    while True:
+        try:
+            requests.get(f"{APP_URL}/", timeout=10)
+        except Exception:
+            pass
+        time.sleep(240)
+
+threading.Thread(target=_keepalive_loop, daemon=True).start()
 
 # ── Guest folder creation ─────────────────────────────────────────────────────
 def create_guest_folder(sender_label, file_ids, event_name):
@@ -1274,75 +1283,7 @@ def _handle_whatsapp():
     media_wid = (media_obj.get("id") or media_obj.get("_id") or
                  media_obj.get("mediaId") or "")
     print(f"[MEDIA] msg_id={msg_id!r} device_id={device_id!r} msg_link={msg_link!r} media_wid={media_wid!r} media_url={media_url!r} has_media={has_media}", flush=True)
-    _media_bytes_override = None
-    if has_media and WASSENGER_API_KEY:
-        hdrs = {"Authorization": WASSENGER_API_KEY}
-        BASE = "https://api.wassenger.com"
-
-        def _abs(url):
-            return (BASE + url) if url and url.startswith("/") else url
-
-        if not media_url:
-            lookups = []
-            if msg_link:
-                lookups.append(msg_link)
-            if device_id and msg_id:
-                lookups.append(f"/v1/devices/{device_id}/messages/{msg_id}")
-            lookups += [f"/v1/messages/{msg_id}"]
-            lookups = [l for l in lookups if l and not l.endswith("/")]
-
-            def _lookup_one(lk):
-                try:
-                    r = _session.get(f"{BASE}{lk}", headers=hdrs, timeout=10)
-                    print(f"[MEDIA] GET {lk} => {r.status_code}", flush=True)
-                    if r.status_code == 200:
-                        mo = r.json().get("media") or {}
-                        dl = ((mo.get("links") or {}).get("download") or
-                              mo.get("url") or mo.get("link") or mo.get("downloadUrl") or "")
-                        return _abs(dl) if dl else None, mo.get("id") or ""
-                except Exception as e:
-                    print(f"[MEDIA] GET {lk} error: {e}", flush=True)
-                return None, ""
-
-            if lookups:
-                _found_url, _found_wid = "", ""
-                with ThreadPoolExecutor(max_workers=len(lookups)) as _ex:
-                    for _fut in as_completed([_ex.submit(_lookup_one, l) for l in lookups]):
-                        _u, _w = _fut.result()
-                        if _u and not _found_url:
-                            _found_url = _u
-                        if _w and not _found_wid:
-                            _found_wid = _w
-                if _found_url:
-                    media_url = _found_url
-                    print(f"[MEDIA] found download URL: {media_url}", flush=True)
-                if _found_wid and not media_wid:
-                    media_wid = _found_wid
-
-        if media_url and not _media_bytes_override:
-            try:
-                r = _session.get(media_url, headers=hdrs, timeout=30, allow_redirects=True)
-                ct = r.headers.get("Content-Type", "")
-                print(f"[MEDIA] download {media_url} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
-                if r.status_code == 200 and len(r.content) > 500:
-                    _media_bytes_override = r.content
-                    media_url = ""
-            except Exception as e:
-                print(f"[MEDIA] download error: {e}", flush=True)
-
-        if not _media_bytes_override and media_wid and device_id:
-            fallback = f"{BASE}/v1/chat/{device_id}/files/{media_wid}/download"
-            try:
-                r = _session.get(fallback, headers=hdrs, timeout=20)
-                ct = r.headers.get("Content-Type", "")
-                print(f"[MEDIA] fallback {fallback} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
-                if r.status_code == 200 and len(r.content) > 500:
-                    _media_bytes_override = r.content
-            except Exception as e:
-                print(f"[MEDIA] fallback error: {e}", flush=True)
-
-    num_media = 1 if has_media and (media_url or _media_bytes_override) else 0
-    print(f"[WH] sender={sender} type={msg_type} has_media={has_media} num_media={num_media} media_url={media_url!r}", flush=True)
+    print(f"[WH] sender={sender} type={msg_type} has_media={has_media} media_url={media_url!r}", flush=True)
 
     def _reply(text, murl=None):
         send_msg(sender, text, media_url=murl)
@@ -1365,21 +1306,16 @@ def _handle_whatsapp():
                 )
                 return _reply("✅ تم إنهاء الجلسة.")
             else:
-                # Forward owner reply to user
                 send_msg(user_phone, f"👤 *فريق قمرة:*\n{body_text}")
-                _agent_sessions[user_phone]["ts"] = time.time()  # renew TTL
+                _agent_sessions[user_phone]["ts"] = time.time()
                 return "", 200
-        # Owner not in a session — ignore (could be owner sending a selfie or testing)
         return "", 200
 
     conv  = _get_conv(sender)
     state = conv["state"]
 
-    # ── Selfie received ───────────────────────────────────────────────────────
-    if num_media > 0:
-        if not media_url and not _media_bytes_override:
-            return _reply("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
-
+    # ── Selfie received — ACK instantly, download + search in background ─────
+    if has_media:
         event_code = conv.get("event_code")
         if not event_code or not get_event(event_code):
             todays = get_todays_events()
@@ -1397,41 +1333,90 @@ def _handle_whatsapp():
             else:
                 return _reply("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
 
-        if _media_bytes_override:
-            selfie_bytes = _media_bytes_override
-        else:
-            selfie_bytes = None
-            auth_hdrs = {"Authorization": WASSENGER_API_KEY} if WASSENGER_API_KEY else {}
-            for attempt_url in ([media_url] if media_url else []):
-                try:
-                    r = _session.get(attempt_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
-                    print(f"[SELFIE] url download status={r.status_code} size={len(r.content)}", flush=True)
-                    if r.status_code == 200 and len(r.content) > 500:
-                        selfie_bytes = r.content
-                        break
-                    r2 = _session.get(attempt_url, timeout=20, allow_redirects=True)
-                    if r2.status_code == 200 and len(r2.content) > 500:
-                        selfie_bytes = r2.content
-                        break
-                except Exception as e:
-                    print(f"[SELFIE] download error: {e}", flush=True)
-
-        if not selfie_bytes:
-            return _reply("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
-
+        event_name = get_event(event_code)["name"]
         _clear_conv(sender)
         _sender, _event_code = sender, event_code
 
+        # Reply immediately — user sees this before we even start downloading
+        send_msg(_sender, f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳")
+
+        _cap_msg_link  = msg_link
+        _cap_msg_id    = msg_id
+        _cap_device_id = device_id
+        _cap_media_url = media_url
+        _cap_media_wid = media_wid
+
         def run():
             try:
+                selfie_bytes = None
+
+                if WASSENGER_API_KEY:
+                    hdrs = {"Authorization": WASSENGER_API_KEY}
+                    BASE = "https://api.wassenger.com"
+
+                    def _abs(u):
+                        return (BASE + u) if u and u.startswith("/") else u
+
+                    _mu = _cap_media_url
+                    _mw = _cap_media_wid
+
+                    if not _mu:
+                        lks = [l for l in [
+                            _cap_msg_link,
+                            f"/v1/devices/{_cap_device_id}/messages/{_cap_msg_id}" if _cap_device_id and _cap_msg_id else "",
+                            f"/v1/messages/{_cap_msg_id}",
+                        ] if l and not l.endswith("/")]
+
+                        def _lk(lk):
+                            try:
+                                r = _session.get(f"{BASE}{lk}", headers=hdrs, timeout=10)
+                                if r.status_code == 200:
+                                    mo = r.json().get("media") or {}
+                                    dl = ((mo.get("links") or {}).get("download") or
+                                          mo.get("url") or mo.get("link") or mo.get("downloadUrl") or "")
+                                    return _abs(dl) if dl else None, mo.get("id") or ""
+                            except Exception as e:
+                                print(f"[MEDIA] GET {lk} error: {e}", flush=True)
+                            return None, ""
+
+                        if lks:
+                            with ThreadPoolExecutor(max_workers=len(lks)) as ex:
+                                for fut in as_completed([ex.submit(_lk, l) for l in lks]):
+                                    u, w = fut.result()
+                                    if u and not _mu:
+                                        _mu = u
+                                        print(f"[MEDIA] found URL: {_mu}", flush=True)
+                                    if w and not _mw:
+                                        _mw = w
+
+                    if _mu:
+                        try:
+                            r = _session.get(_mu, headers=hdrs, timeout=30, allow_redirects=True)
+                            if r.status_code == 200 and len(r.content) > 500:
+                                selfie_bytes = r.content
+                        except Exception as e:
+                            print(f"[MEDIA] download error: {e}", flush=True)
+
+                    if not selfie_bytes and _mw and _cap_device_id:
+                        try:
+                            r = _session.get(f"{BASE}/v1/chat/{_cap_device_id}/files/{_mw}/download",
+                                             headers=hdrs, timeout=20)
+                            if r.status_code == 200 and len(r.content) > 500:
+                                selfie_bytes = r.content
+                        except Exception as e:
+                            print(f"[MEDIA] fallback error: {e}", flush=True)
+
+                if not selfie_bytes:
+                    send_msg(_sender, "⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
+                    return
+
                 search_and_send(selfie_bytes, _sender, _event_code)
             except Exception as e:
                 print(f"[ERROR] {e}", flush=True)
                 send_msg(_sender, f"⚠️ {str(e)}")
 
         threading.Thread(target=run, daemon=True).start()
-        event_name = get_event(event_code)["name"]
-        return _reply(f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳")
+        return "", 200
 
     # ── Text received ─────────────────────────────────────────────────────────
     upper = body_text.upper().strip()
