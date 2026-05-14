@@ -5,6 +5,7 @@ import threading
 import hashlib
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
 from botocore.exceptions import ClientError
@@ -15,6 +16,13 @@ from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image, ImageOps
 
 app = Flask(__name__)
+
+# Persistent HTTP session with connection pooling — avoids TCP handshake on every Wassenger call
+from requests.adapters import HTTPAdapter as _HTTPAdapter
+_session = requests.Session()
+_http_adapter = _HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=1)
+_session.mount("https://", _http_adapter)
+_session.mount("http://", _http_adapter)
 
 # ── In-memory log ring buffer ─────────────────────────────────────────────────
 import collections, sys
@@ -55,10 +63,10 @@ def send_msg(to, body, media_url=None):
     if media_url:
         payload["media"] = {"url": media_url}
     try:
-        r = requests.post(WASSENGER_API_URL, json=payload,
-                          headers={"Authorization": WASSENGER_API_KEY,
-                                   "Content-Type": "application/json"},
-                          timeout=20)
+        r = _session.post(WASSENGER_API_URL, json=payload,
+                         headers={"Authorization": WASSENGER_API_KEY,
+                                  "Content-Type": "application/json"},
+                         timeout=20)
         r.raise_for_status()
     except Exception as e:
         print(f"[WASSENGER] Send error to {to}: {e}", flush=True)
@@ -72,10 +80,10 @@ def send_buttons(to, body, buttons):
         "buttons": [{"text": b} for b in buttons[:3]],
     }
     try:
-        r = requests.post(WASSENGER_API_URL, json=payload,
-                          headers={"Authorization": WASSENGER_API_KEY,
-                                   "Content-Type": "application/json"},
-                          timeout=20)
+        r = _session.post(WASSENGER_API_URL, json=payload,
+                         headers={"Authorization": WASSENGER_API_KEY,
+                                  "Content-Type": "application/json"},
+                         timeout=20)
         if r.status_code in (200, 201):
             return
         # If Wassenger rejected buttons, fall through to plain text
@@ -1281,29 +1289,39 @@ def _handle_whatsapp():
             if device_id and msg_id:
                 lookups.append(f"/v1/devices/{device_id}/messages/{msg_id}")
             lookups += [f"/v1/messages/{msg_id}"]
-            for lookup in lookups:
-                if lookup and not lookup.endswith("/"):
-                    try:
-                        r = requests.get(f"{BASE}{lookup}", headers=hdrs, timeout=15)
-                        print(f"[MEDIA] GET {lookup} => {r.status_code}", flush=True)
-                        if r.status_code == 200:
-                            d = r.json()
-                            mo = d.get("media") or {}
-                            dl = ((mo.get("links") or {}).get("download") or
-                                  mo.get("url") or mo.get("link") or
-                                  mo.get("downloadUrl") or "")
-                            if dl:
-                                media_url = _abs(dl)
-                                print(f"[MEDIA] found download URL: {media_url}", flush=True)
-                                break
-                            if not media_wid:
-                                media_wid = mo.get("id") or ""
-                    except Exception as e:
-                        print(f"[MEDIA] GET {lookup} error: {e}", flush=True)
+            lookups = [l for l in lookups if l and not l.endswith("/")]
+
+            def _lookup_one(lk):
+                try:
+                    r = _session.get(f"{BASE}{lk}", headers=hdrs, timeout=10)
+                    print(f"[MEDIA] GET {lk} => {r.status_code}", flush=True)
+                    if r.status_code == 200:
+                        mo = r.json().get("media") or {}
+                        dl = ((mo.get("links") or {}).get("download") or
+                              mo.get("url") or mo.get("link") or mo.get("downloadUrl") or "")
+                        return _abs(dl) if dl else None, mo.get("id") or ""
+                except Exception as e:
+                    print(f"[MEDIA] GET {lk} error: {e}", flush=True)
+                return None, ""
+
+            if lookups:
+                _found_url, _found_wid = "", ""
+                with ThreadPoolExecutor(max_workers=len(lookups)) as _ex:
+                    for _fut in as_completed([_ex.submit(_lookup_one, l) for l in lookups]):
+                        _u, _w = _fut.result()
+                        if _u and not _found_url:
+                            _found_url = _u
+                        if _w and not _found_wid:
+                            _found_wid = _w
+                if _found_url:
+                    media_url = _found_url
+                    print(f"[MEDIA] found download URL: {media_url}", flush=True)
+                if _found_wid and not media_wid:
+                    media_wid = _found_wid
 
         if media_url and not _media_bytes_override:
             try:
-                r = requests.get(media_url, headers=hdrs, timeout=30, allow_redirects=True)
+                r = _session.get(media_url, headers=hdrs, timeout=30, allow_redirects=True)
                 ct = r.headers.get("Content-Type", "")
                 print(f"[MEDIA] download {media_url} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
                 if r.status_code == 200 and len(r.content) > 500:
@@ -1315,7 +1333,7 @@ def _handle_whatsapp():
         if not _media_bytes_override and media_wid and device_id:
             fallback = f"{BASE}/v1/chat/{device_id}/files/{media_wid}/download"
             try:
-                r = requests.get(fallback, headers=hdrs, timeout=20)
+                r = _session.get(fallback, headers=hdrs, timeout=20)
                 ct = r.headers.get("Content-Type", "")
                 print(f"[MEDIA] fallback {fallback} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
                 if r.status_code == 200 and len(r.content) > 500:
@@ -1386,12 +1404,12 @@ def _handle_whatsapp():
             auth_hdrs = {"Authorization": WASSENGER_API_KEY} if WASSENGER_API_KEY else {}
             for attempt_url in ([media_url] if media_url else []):
                 try:
-                    r = requests.get(attempt_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
+                    r = _session.get(attempt_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
                     print(f"[SELFIE] url download status={r.status_code} size={len(r.content)}", flush=True)
                     if r.status_code == 200 and len(r.content) > 500:
                         selfie_bytes = r.content
                         break
-                    r2 = requests.get(attempt_url, timeout=20, allow_redirects=True)
+                    r2 = _session.get(attempt_url, timeout=20, allow_redirects=True)
                     if r2.status_code == 200 and len(r2.content) > 500:
                         selfie_bytes = r2.content
                         break
