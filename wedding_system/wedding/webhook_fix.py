@@ -530,9 +530,10 @@ def run_index(event_code):
         photos = list_drive_photos(gdrive_folder_id)
         print(f"[INDEX] {event_code}: {len(photos)} photos, {len(indexed_ids)} indexed", flush=True)
 
+        no_face_ids = set(state.get("no_face_ids", []))
         new_count = 0
         for i, photo in enumerate(photos):
-            if photo["id"] in indexed_ids:
+            if photo["id"] in indexed_ids or photo["id"] in no_face_ids:
                 continue
             try:
                 img_bytes = download_file(photo["id"])
@@ -542,18 +543,20 @@ def run_index(event_code):
                     file_map[photo["id"]] = {"name": photo["name"], "link": photo["webViewLink"]}
                     new_count += n
                 else:
-                    print(f"[INDEX] No face: {photo['name']}", flush=True)
+                    no_face_ids.add(photo["id"])
             except Exception as e:
                 print(f"[INDEX] Error {photo['name']}: {e}", flush=True)
 
             if (i + 1) % 20 == 0:
-                state["indexed_ids"] = list(indexed_ids)
-                state["file_map"]    = file_map
+                state["indexed_ids"]  = list(indexed_ids)
+                state["no_face_ids"]  = list(no_face_ids)
+                state["file_map"]     = file_map
                 save_state(event_code, state)
                 print(f"[INDEX] {event_code}: {i+1}/{len(photos)}, {new_count} new", flush=True)
 
-        state["indexed_ids"] = list(indexed_ids)
-        state["file_map"]    = file_map
+        state["indexed_ids"]  = list(indexed_ids)
+        state["no_face_ids"]  = list(no_face_ids)
+        state["file_map"]     = file_map
         save_state(event_code, state)
         print(f"[INDEX] {event_code}: done. {len(indexed_ids)} total, {new_count} new", flush=True)
         return len(indexed_ids)
@@ -571,7 +574,7 @@ def _auto_index_loop():
                 run_index(code)
             except Exception as e:
                 print(f"[AUTO-INDEX] {code} error: {e}", flush=True)
-        time.sleep(30)
+        time.sleep(300)
 
 threading.Thread(target=_auto_index_loop, daemon=True).start()
 
