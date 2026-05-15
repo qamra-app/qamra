@@ -92,6 +92,25 @@ def send_buttons(to, body, buttons):
 _agent_sessions: dict = {}
 _AGENT_TTL = 7200  # 2 hours
 
+# ── Inquiry confirmation timers ────────────────────────────────────────────────
+# Maps user_phone → threading.Timer (fires 2 min after last inquiry message)
+_inquiry_timers: dict = {}
+
+def _cancel_inquiry_timer(phone):
+    t = _inquiry_timers.pop(phone, None)
+    if t:
+        t.cancel()
+
+def _start_inquiry_timer(phone):
+    _cancel_inquiry_timer(phone)
+    def _confirm():
+        _inquiry_timers.pop(phone, None)
+        send_msg(phone, "✅ تم إرسال استفسارك لفريق الدعم وسيتم الرد عليك قريباً 🌙")
+    t = threading.Timer(120, _confirm)
+    t.daemon = True
+    t.start()
+    _inquiry_timers[phone] = t
+
 
 def _get_agent_session(user_phone):
     s = _agent_sessions.get(user_phone)
@@ -270,6 +289,10 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "qamra-state-backup")
 _s3_ok    = True
 _drive_ok = True
 
+# In-memory state cache — survives loop runs, lost only on Railway restart
+# On restart, S3/Drive is the backup. This prevents re-indexing within a session.
+_state_cache: dict = {}
+
 def _s3_key(event_code):
     return f"qamra_state_{event_code}.json"
 
@@ -327,11 +350,16 @@ def _load_state_from_s3(event_code):
         return None
 
 def load_state(event_code):
+    # 1. Check in-memory cache first — fastest, no API calls
+    if event_code in _state_cache:
+        return _state_cache[event_code]
+
     path = _state_file(event_code)
     try:
         with open(path) as f:
             s = json.load(f)
             if s.get("indexed_ids") is not None:
+                _state_cache[event_code] = s
                 return s
     except Exception:
         pass
@@ -339,6 +367,7 @@ def load_state(event_code):
     if s is not None:
         with open(path, "w") as f:
             json.dump(s, f)
+        _state_cache[event_code] = s
         return s
     try:
         name = _state_drive_name(event_code)
@@ -353,6 +382,7 @@ def load_state(event_code):
             s   = json.loads(raw)
             with open(path, "w") as f:
                 json.dump(s, f)
+            _state_cache[event_code] = s
             print(f"[STATE] Loaded {event_code} from Drive ({len(s.get('indexed_ids',[]))} ids)", flush=True)
             return s
     except Exception as e:
@@ -372,13 +402,17 @@ def load_state(event_code):
                 s = {"indexed_ids": list(face_ids), "file_map": {}}
                 with open(path, "w") as f:
                     json.dump(s, f)
+                _state_cache[event_code] = s
                 print(f"[STATE] Rebuilt {event_code} from Rekognition ({len(face_ids)} ids)", flush=True)
                 return s
     except Exception as e:
         print(f"[STATE] Rekognition rebuild error: {e}", flush=True)
-    return {"indexed_ids": [], "file_map": {}}
+    empty = {"indexed_ids": [], "file_map": {}}
+    _state_cache[event_code] = empty
+    return empty
 
 def save_state(event_code, state):
+    _state_cache[event_code] = state  # update memory first — instant, no API calls
     with open(_state_file(event_code), "w") as f:
         json.dump(state, f)
     threading.Thread(target=_save_state_to_s3,   args=(event_code, state.copy()), daemon=True).start()
@@ -447,6 +481,15 @@ def index_face(image_bytes, file_id, collection_id):
     except Exception as e:
         print(f"[INDEX] Error: {e}", flush=True)
         return 0
+
+def count_faces(image_bytes):
+    image_bytes = resize_for_rekognition(image_bytes)
+    try:
+        resp = rek.detect_faces(Image={"Bytes": image_bytes}, Attributes=["DEFAULT"])
+        return len(resp.get("FaceDetails", []))
+    except Exception as e:
+        print(f"[FACES] detect error: {e}", flush=True)
+        return 1
 
 def search_by_selfie(selfie_bytes, collection_id):
     selfie_bytes = resize_for_rekognition(selfie_bytes)
@@ -615,6 +658,11 @@ def search_and_send(selfie_bytes, sender, event_code):
     event    = get_event(event_code)
     if not event:
         send_msg(sender, "⚠️ الحفل غير موجود. تأكد من الكود وحاول مرة ثانية.")
+        return
+
+    face_count = count_faces(selfie_bytes)
+    if face_count > 1:
+        send_msg(sender, "📸 الصورة تحتوي على أكثر من وجه!\n\nأرسل سيلفي لوجهك *منفرداً* حتى أتمكن من إيجاد صورك بدقة 🎯")
         return
 
     state    = load_state(event_code)
@@ -1350,6 +1398,8 @@ def _handle_whatsapp():
                 # Forward owner reply to user
                 send_msg(user_phone, f"👤 *فريق قمرة:*\n{body_text}")
                 _agent_sessions[user_phone]["ts"] = time.time()  # renew TTL
+                _cancel_inquiry_timer(user_phone)  # owner replied, no need for auto-confirm
+                _set_conv(user_phone, "with_agent", event_code=_get_conv(user_phone).get("event_code"))
                 return "", 200
         # Owner not in a session — ignore (could be owner sending a selfie or testing)
         return "", 200
@@ -1359,6 +1409,13 @@ def _handle_whatsapp():
 
     # ── Selfie received ───────────────────────────────────────────────────────
     if num_media > 0:
+        if state not in ("awaiting_selfie", "choosing_event"):
+            send_buttons(sender,
+                "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
+                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
+            )
+            return "", 200
+
         if not media_url and not _media_bytes_override:
             return _reply("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
 
@@ -1379,40 +1436,52 @@ def _handle_whatsapp():
             else:
                 return _reply("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
 
-        if _media_bytes_override:
-            selfie_bytes = _media_bytes_override
-        else:
-            selfie_bytes = None
-            auth_hdrs = {"Authorization": WASSENGER_API_KEY} if WASSENGER_API_KEY else {}
-            for attempt_url in ([media_url] if media_url else []):
-                try:
-                    r = requests.get(attempt_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
-                    print(f"[SELFIE] url download status={r.status_code} size={len(r.content)}", flush=True)
-                    if r.status_code == 200 and len(r.content) > 500:
-                        selfie_bytes = r.content
-                        break
-                    r2 = requests.get(attempt_url, timeout=20, allow_redirects=True)
-                    if r2.status_code == 200 and len(r2.content) > 500:
-                        selfie_bytes = r2.content
-                        break
-                except Exception as e:
-                    print(f"[SELFIE] download error: {e}", flush=True)
-
-        if not selfie_bytes:
-            return _reply("⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
-
         _clear_conv(sender)
+        _set_conv(sender, "awaiting_selfie", event_code=event_code)
+        event_name = get_event(event_code)["name"]
         _sender, _event_code = sender, event_code
+        _media_bytes_captured = _media_bytes_override
+        _media_url_captured   = media_url
 
         def run():
+            selfie_bytes = _media_bytes_captured
+            if not selfie_bytes:
+                auth_hdrs = {"Authorization": WASSENGER_API_KEY} if WASSENGER_API_KEY else {}
+                for attempt_url in ([_media_url_captured] if _media_url_captured else []):
+                    try:
+                        r = requests.get(attempt_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
+                        print(f"[SELFIE] url download status={r.status_code} size={len(r.content)}", flush=True)
+                        if r.status_code == 200 and len(r.content) > 500:
+                            selfie_bytes = r.content
+                            break
+                        r2 = requests.get(attempt_url, timeout=20, allow_redirects=True)
+                        if r2.status_code == 200 and len(r2.content) > 500:
+                            selfie_bytes = r2.content
+                            break
+                    except Exception as e:
+                        print(f"[SELFIE] download error: {e}", flush=True)
+
+            if not selfie_bytes:
+                send_msg(_sender, "⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
+                return
+
+            _done = threading.Event()
+            def _progress():
+                if not _done.is_set():
+                    send_msg(_sender, "⏳ لسه شغال على البحث، معك بثوانٍ...")
+            _progress_timer = threading.Timer(10, _progress)
+            _progress_timer.daemon = True
+            _progress_timer.start()
             try:
                 search_and_send(selfie_bytes, _sender, _event_code)
             except Exception as e:
                 print(f"[ERROR] {e}", flush=True)
                 send_msg(_sender, f"⚠️ {str(e)}")
+            finally:
+                _done.set()
+                _progress_timer.cancel()
 
         threading.Thread(target=run, daemon=True).start()
-        event_name = get_event(event_code)["name"]
         return _reply(f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳")
 
     # ── Text received ─────────────────────────────────────────────────────────
@@ -1432,36 +1501,18 @@ def _handle_whatsapp():
         options = "\n".join(f"*{i+1}* — {get_event(c)['name']}" for i, c in enumerate(today_list))
         return _reply(f"أرسل رقم الحفل:\n\n{options}")
 
-    if upper in _events:
-        event = _events[upper]
-        _set_conv(sender, "awaiting_selfie", event_code=upper)
-        return _reply(
-            f"🌙 أهلاً بك في *{event['name']}*!\n\n"
-            "أرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك من الحفل 🎉📸"
-        )
-
-    if any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start", "مرحبً")):
+    if state in ("new", "routing") and any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start", "مرحبً")):
         _clear_conv(sender)
         _end_agent_session(sender)
         state = "new"
 
     if state == "new":
         _set_conv(sender, "routing")
-        # If the message is already a valid menu selection, skip the greeting
-        # and fall through directly to the routing handler below.
-        # This prevents returning users from having to press 1/2 twice.
-        _already_selected = (
-            body_text in ("1", "١", "📸 ابحث عن صوري", "2", "٢", "💬 استفسار وتواصل")
-            or any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل", "ابحث",
-                                             "استفسار", "سؤال", "تواصل"))
+        send_buttons(sender,
+            "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
+            ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
         )
-        if not _already_selected:
-            send_buttons(sender,
-                "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
-                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-            )
-            return "", 200
-        state = "routing"  # fall through
+        return "", 200
 
     if state == "routing":
         picked_photos  = body_text in ("1", "١", "📸 ابحث عن صوري") or \
@@ -1518,17 +1569,37 @@ def _handle_whatsapp():
         clean_sender = sender.replace("whatsapp:", "")
         owner = OWNER_PHONE.lstrip("+")
         _start_agent_session(sender, owner)
-        _set_conv(sender, "with_agent")
+        _set_conv(sender, "collecting_inquiry")
         send_msg(f"+{OWNER_PHONE}",
             f"📩 *استفسار جديد* — الضيف: +{clean_sender}\n\n"
             f"{body_text}\n\n"
             "_للرد: أجب على هذه الرسالة وسيصل للضيف تلقائياً_\n"
             "_لإنهاء المحادثة: أرسل *#end*_"
         )
-        return _reply(
-            "✅ تم تحويلك لفريق الدعم! سيردون عليك قريباً 🌙\n\n"
-            "يمكنك الاستمرار في إرسال رسائلك."
+        send_msg("+97433323001",
+            f"📩 استفسار جديد من +{clean_sender}:\n\nالاستفسار: {body_text}"
         )
+        _start_inquiry_timer(sender)
+        return _reply("شكراً! هل لديك أي إضافة أو استفسار آخر؟ 💬")
+
+    if state == "collecting_inquiry":
+        # User adding more to their inquiry — forward and reset timer
+        clean_sender = sender.replace("whatsapp:", "")
+        session = _get_agent_session(sender)
+        if session:
+            send_msg(f"+{OWNER_PHONE}",
+                f"💬 *إضافة من الضيف* (+{clean_sender}):\n{body_text}"
+            )
+            _agent_sessions[sender]["ts"] = time.time()
+            _start_inquiry_timer(sender)
+            return _reply("✅ تم إضافة رسالتك.")
+        else:
+            _clear_conv(sender)
+            send_buttons(sender,
+                "🌙 انتهت جلسة الدعم. كيف أقدر أساعدك؟",
+                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
+            )
+            return "", 200
 
     if state == "with_agent":
         # Forward subsequent messages to owner
