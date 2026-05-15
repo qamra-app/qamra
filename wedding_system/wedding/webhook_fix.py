@@ -5,6 +5,7 @@ import threading
 import hashlib
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
 from botocore.exceptions import ClientError
@@ -15,6 +16,13 @@ from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image, ImageOps
 
 app = Flask(__name__)
+
+# Persistent HTTP session with connection pooling — avoids TCP handshake on every Wassenger call
+from requests.adapters import HTTPAdapter as _HTTPAdapter
+_session = requests.Session()
+_http_adapter = _HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=1)
+_session.mount("https://", _http_adapter)
+_session.mount("http://", _http_adapter)
 
 # ── In-memory log ring buffer ─────────────────────────────────────────────────
 import collections, sys
@@ -55,10 +63,10 @@ def send_msg(to, body, media_url=None):
     if media_url:
         payload["media"] = {"url": media_url}
     try:
-        r = requests.post(WASSENGER_API_URL, json=payload,
-                          headers={"Authorization": WASSENGER_API_KEY,
-                                   "Content-Type": "application/json"},
-                          timeout=20)
+        r = _session.post(WASSENGER_API_URL, json=payload,
+                         headers={"Authorization": WASSENGER_API_KEY,
+                                  "Content-Type": "application/json"},
+                         timeout=20)
         r.raise_for_status()
     except Exception as e:
         print(f"[WASSENGER] Send error to {to}: {e}", flush=True)
@@ -72,10 +80,10 @@ def send_buttons(to, body, buttons):
         "buttons": [{"text": b} for b in buttons[:3]],
     }
     try:
-        r = requests.post(WASSENGER_API_URL, json=payload,
-                          headers={"Authorization": WASSENGER_API_KEY,
-                                   "Content-Type": "application/json"},
-                          timeout=20)
+        r = _session.post(WASSENGER_API_URL, json=payload,
+                         headers={"Authorization": WASSENGER_API_KEY,
+                                  "Content-Type": "application/json"},
+                         timeout=20)
         if r.status_code in (200, 201):
             return
         # If Wassenger rejected buttons, fall through to plain text
@@ -445,15 +453,12 @@ _folder_cache = {}  # session_id -> folder_url | None (building) | "" (failed)
 
 # ── Rekognition helpers ───────────────────────────────────────────────────────
 def resize_for_rekognition(image_bytes):
-    if len(image_bytes) <= 5 * 1024 * 1024:
-        return image_bytes
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        if img.width > 2048:
-            ratio = 2048 / img.width
-            img = img.resize((2048, int(img.height * ratio)), Image.LANCZOS)
+        if img.width > 800 or img.height > 800:
+            img.thumbnail((800, 800), Image.LANCZOS)
         out = io.BytesIO()
-        img.save(out, format="JPEG", quality=85)
+        img.save(out, format="JPEG", quality=80)
         return out.getvalue()
     except Exception as e:
         print(f"[RESIZE] {e}", flush=True)
@@ -568,9 +573,10 @@ def run_index(event_code):
         photos = list_drive_photos(gdrive_folder_id)
         print(f"[INDEX] {event_code}: {len(photos)} photos, {len(indexed_ids)} indexed", flush=True)
 
+        no_face_ids = set(state.get("no_face_ids", []))
         new_count = 0
         for i, photo in enumerate(photos):
-            if photo["id"] in indexed_ids:
+            if photo["id"] in indexed_ids or photo["id"] in no_face_ids:
                 continue
             try:
                 img_bytes = download_file(photo["id"])
@@ -580,18 +586,20 @@ def run_index(event_code):
                     file_map[photo["id"]] = {"name": photo["name"], "link": photo["webViewLink"]}
                     new_count += n
                 else:
-                    print(f"[INDEX] No face: {photo['name']}", flush=True)
+                    no_face_ids.add(photo["id"])
             except Exception as e:
                 print(f"[INDEX] Error {photo['name']}: {e}", flush=True)
 
             if (i + 1) % 20 == 0:
-                state["indexed_ids"] = list(indexed_ids)
-                state["file_map"]    = file_map
+                state["indexed_ids"]  = list(indexed_ids)
+                state["no_face_ids"]  = list(no_face_ids)
+                state["file_map"]     = file_map
                 save_state(event_code, state)
                 print(f"[INDEX] {event_code}: {i+1}/{len(photos)}, {new_count} new", flush=True)
 
-        state["indexed_ids"] = list(indexed_ids)
-        state["file_map"]    = file_map
+        state["indexed_ids"]  = list(indexed_ids)
+        state["no_face_ids"]  = list(no_face_ids)
+        state["file_map"]     = file_map
         save_state(event_code, state)
         print(f"[INDEX] {event_code}: done. {len(indexed_ids)} total, {new_count} new", flush=True)
         return len(indexed_ids)
@@ -609,9 +617,21 @@ def _auto_index_loop():
                 run_index(code)
             except Exception as e:
                 print(f"[AUTO-INDEX] {code} error: {e}", flush=True)
-        time.sleep(30)
+        time.sleep(300)
 
 threading.Thread(target=_auto_index_loop, daemon=True).start()
+
+# ── Keep-alive: ping self every 4 min to prevent Railway cold starts ──────────
+def _keepalive_loop():
+    time.sleep(60)
+    while True:
+        try:
+            requests.get(f"{APP_URL}/", timeout=10)
+        except Exception:
+            pass
+        time.sleep(240)
+
+threading.Thread(target=_keepalive_loop, daemon=True).start()
 
 # ── Guest folder creation ─────────────────────────────────────────────────────
 def create_guest_folder(sender_label, file_ids, event_name):
@@ -1314,68 +1334,10 @@ def _handle_whatsapp():
     media_wid = (media_obj.get("id") or media_obj.get("_id") or
                  media_obj.get("mediaId") or "")
     print(f"[MEDIA] msg_id={msg_id!r} device_id={device_id!r} msg_link={msg_link!r} media_wid={media_wid!r} media_url={media_url!r} has_media={has_media}", flush=True)
-    _media_bytes_override = None
-    if has_media and WASSENGER_API_KEY:
-        hdrs = {"Authorization": WASSENGER_API_KEY}
-        BASE = "https://api.wassenger.com"
-
-        def _abs(url):
-            return (BASE + url) if url and url.startswith("/") else url
-
-        if not media_url:
-            lookups = []
-            if msg_link:
-                lookups.append(msg_link)
-            if device_id and msg_id:
-                lookups.append(f"/v1/devices/{device_id}/messages/{msg_id}")
-            lookups += [f"/v1/messages/{msg_id}"]
-            for lookup in lookups:
-                if lookup and not lookup.endswith("/"):
-                    try:
-                        r = requests.get(f"{BASE}{lookup}", headers=hdrs, timeout=15)
-                        print(f"[MEDIA] GET {lookup} => {r.status_code}", flush=True)
-                        if r.status_code == 200:
-                            d = r.json()
-                            mo = d.get("media") or {}
-                            dl = ((mo.get("links") or {}).get("download") or
-                                  mo.get("url") or mo.get("link") or
-                                  mo.get("downloadUrl") or "")
-                            if dl:
-                                media_url = _abs(dl)
-                                print(f"[MEDIA] found download URL: {media_url}", flush=True)
-                                break
-                            if not media_wid:
-                                media_wid = mo.get("id") or ""
-                    except Exception as e:
-                        print(f"[MEDIA] GET {lookup} error: {e}", flush=True)
-
-        if media_url and not _media_bytes_override:
-            try:
-                r = requests.get(media_url, headers=hdrs, timeout=30, allow_redirects=True)
-                ct = r.headers.get("Content-Type", "")
-                print(f"[MEDIA] download {media_url} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
-                if r.status_code == 200 and len(r.content) > 500:
-                    _media_bytes_override = r.content
-                    media_url = ""
-            except Exception as e:
-                print(f"[MEDIA] download error: {e}", flush=True)
-
-        if not _media_bytes_override and media_wid and device_id:
-            fallback = f"{BASE}/v1/chat/{device_id}/files/{media_wid}/download"
-            try:
-                r = requests.get(fallback, headers=hdrs, timeout=20)
-                ct = r.headers.get("Content-Type", "")
-                print(f"[MEDIA] fallback {fallback} => {r.status_code} ct={ct} size={len(r.content)}", flush=True)
-                if r.status_code == 200 and len(r.content) > 500:
-                    _media_bytes_override = r.content
-            except Exception as e:
-                print(f"[MEDIA] fallback error: {e}", flush=True)
-
-    num_media = 1 if has_media and (media_url or _media_bytes_override) else 0
-    print(f"[WH] sender={sender} type={msg_type} has_media={has_media} num_media={num_media} media_url={media_url!r}", flush=True)
+    print(f"[WH] sender={sender} type={msg_type} has_media={has_media} media_url={media_url!r}", flush=True)
 
     def _reply(text, murl=None):
-        send_msg(sender, text, media_url=murl)
+        threading.Thread(target=send_msg, args=(sender, text), kwargs={"media_url": murl}, daemon=True).start()
         return "", 200
 
     if not sender:
@@ -1395,29 +1357,24 @@ def _handle_whatsapp():
                 )
                 return _reply("✅ تم إنهاء الجلسة.")
             else:
-                # Forward owner reply to user
                 send_msg(user_phone, f"👤 *فريق قمرة:*\n{body_text}")
                 _agent_sessions[user_phone]["ts"] = time.time()  # renew TTL
-                _cancel_inquiry_timer(user_phone)  # owner replied, no need for auto-confirm
+                _cancel_inquiry_timer(user_phone)
                 _set_conv(user_phone, "with_agent", event_code=_get_conv(user_phone).get("event_code"))
                 return "", 200
-        # Owner not in a session — ignore (could be owner sending a selfie or testing)
         return "", 200
 
     conv  = _get_conv(sender)
     state = conv["state"]
 
-    # ── Selfie received ───────────────────────────────────────────────────────
-    if num_media > 0:
+    # ── Selfie received — ACK instantly, download + search in background ─────
+    if has_media:
         if state not in ("awaiting_selfie", "choosing_event"):
             send_buttons(sender,
                 "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
                 ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
             )
             return "", 200
-
-        if not media_url and not _media_bytes_override:
-            return _reply("⚠️ ما وصلت الصورة. جرب مرة ثانية.")
 
         event_code = conv.get("event_code")
         if not event_code or not get_event(event_code):
@@ -1442,6 +1399,15 @@ def _handle_whatsapp():
         _sender, _event_code = sender, event_code
         _media_bytes_captured = _media_bytes_override
         _media_url_captured   = media_url
+
+        # Fire "searching..." in background — webhook returns 200 instantly
+        threading.Thread(target=send_msg, args=(_sender, f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳"), daemon=True).start()
+
+        _cap_msg_link  = msg_link
+        _cap_msg_id    = msg_id
+        _cap_device_id = device_id
+        _cap_media_url = media_url
+        _cap_media_wid = media_wid
 
         def run():
             selfie_bytes = _media_bytes_captured
@@ -1473,6 +1439,68 @@ def _handle_whatsapp():
             _progress_timer.daemon = True
             _progress_timer.start()
             try:
+                selfie_bytes = None
+
+                if WASSENGER_API_KEY:
+                    hdrs = {"Authorization": WASSENGER_API_KEY}
+                    BASE = "https://api.wassenger.com"
+
+                    def _abs(u):
+                        return (BASE + u) if u and u.startswith("/") else u
+
+                    _mu = _cap_media_url
+                    _mw = _cap_media_wid
+
+                    if not _mu:
+                        lks = [l for l in [
+                            _cap_msg_link,
+                            f"/v1/devices/{_cap_device_id}/messages/{_cap_msg_id}" if _cap_device_id and _cap_msg_id else "",
+                            f"/v1/messages/{_cap_msg_id}",
+                        ] if l and not l.endswith("/")]
+
+                        def _lk(lk):
+                            try:
+                                r = _session.get(f"{BASE}{lk}", headers=hdrs, timeout=10)
+                                if r.status_code == 200:
+                                    mo = r.json().get("media") or {}
+                                    dl = ((mo.get("links") or {}).get("download") or
+                                          mo.get("url") or mo.get("link") or mo.get("downloadUrl") or "")
+                                    return _abs(dl) if dl else None, mo.get("id") or ""
+                            except Exception as e:
+                                print(f"[MEDIA] GET {lk} error: {e}", flush=True)
+                            return None, ""
+
+                        if lks:
+                            with ThreadPoolExecutor(max_workers=len(lks)) as ex:
+                                for fut in as_completed([ex.submit(_lk, l) for l in lks]):
+                                    u, w = fut.result()
+                                    if u and not _mu:
+                                        _mu = u
+                                        print(f"[MEDIA] found URL: {_mu}", flush=True)
+                                    if w and not _mw:
+                                        _mw = w
+
+                    if _mu:
+                        try:
+                            r = _session.get(_mu, headers=hdrs, timeout=30, allow_redirects=True)
+                            if r.status_code == 200 and len(r.content) > 500:
+                                selfie_bytes = r.content
+                        except Exception as e:
+                            print(f"[MEDIA] download error: {e}", flush=True)
+
+                    if not selfie_bytes and _mw and _cap_device_id:
+                        try:
+                            r = _session.get(f"{BASE}/v1/chat/{_cap_device_id}/files/{_mw}/download",
+                                             headers=hdrs, timeout=20)
+                            if r.status_code == 200 and len(r.content) > 500:
+                                selfie_bytes = r.content
+                        except Exception as e:
+                            print(f"[MEDIA] fallback error: {e}", flush=True)
+
+                if not selfie_bytes:
+                    send_msg(_sender, "⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
+                    return
+
                 search_and_send(selfie_bytes, _sender, _event_code)
             except Exception as e:
                 print(f"[ERROR] {e}", flush=True)
@@ -1482,7 +1510,7 @@ def _handle_whatsapp():
                 _progress_timer.cancel()
 
         threading.Thread(target=run, daemon=True).start()
-        return _reply(f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳")
+        return "", 200
 
     # ── Text received ─────────────────────────────────────────────────────────
     upper = body_text.upper().strip()
@@ -1547,10 +1575,7 @@ def _handle_whatsapp():
             _set_conv(sender, "awaiting_inquiry")
             return _reply("بكل سرور! اكتب استفسارك وسنوصله لفريق الدعم 💬")
         else:
-            send_buttons(sender,
-                "من فضلك اختر من القائمة:",
-                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-            )
+            threading.Thread(target=send_buttons, args=(sender, "من فضلك اختر من القائمة:", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
             return "", 200
 
     if state == "awaiting_event_code":
@@ -1613,18 +1638,12 @@ def _handle_whatsapp():
         else:
             # Session expired
             _clear_conv(sender)
-            send_buttons(sender,
-                "🌙 انتهت جلسة الدعم. كيف أقدر أساعدك؟",
-                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-            )
+            threading.Thread(target=send_buttons, args=(sender, "🌙 انتهت جلسة الدعم. كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
             return "", 200
 
     # Fallback
     _clear_conv(sender)
-    send_buttons(sender,
-        "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
-        ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-    )
+    threading.Thread(target=send_buttons, args=(sender, "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
     return "", 200
 
 
