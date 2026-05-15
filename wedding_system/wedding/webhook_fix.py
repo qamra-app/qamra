@@ -1340,8 +1340,8 @@ def _handle_whatsapp():
         _clear_conv(sender)
         _sender, _event_code = sender, event_code
 
-        # Reply immediately — user sees this before we even start downloading
-        send_msg(_sender, f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳")
+        # Fire "searching..." in background — webhook returns 200 instantly
+        threading.Thread(target=send_msg, args=(_sender, f"🔍 جاري البحث في {event_name}... سأرسل لك النتيجة خلال ثوانٍ ⏳"), daemon=True).start()
 
         _cap_msg_link  = msg_link
         _cap_msg_id    = msg_id
