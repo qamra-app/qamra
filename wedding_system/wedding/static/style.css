@@ -1,0 +1,856 @@
+/* ═══════════════════════════════════════════════════════════
+   QAMRA Kiosk — Ivory Editorial Theme
+   Mirrors the qamra landing page design system exactly.
+   Portrait 1080×1920 touchscreen.
+═══════════════════════════════════════════════════════════ */
+
+@font-face { font-family:'Thmanyah Sans'; src:url('assets/fonts/ThmanyahSans-Light.woff2') format('woff2'); font-weight:300; font-display:swap; }
+@font-face { font-family:'Thmanyah Sans'; src:url('assets/fonts/ThmanyahSans-Regular.woff2') format('woff2'); font-weight:400; font-display:swap; }
+@font-face { font-family:'Thmanyah Sans'; src:url('assets/fonts/ThmanyahSans-Medium.woff2') format('woff2'); font-weight:500; font-display:swap; }
+@font-face { font-family:'Thmanyah Sans'; src:url('assets/fonts/ThmanyahSans-Bold.woff2') format('woff2'); font-weight:700; font-display:swap; }
+@font-face { font-family:'Thmanyah Serif Display'; src:url('assets/fonts/ThmanyahSerifDisplay-Light.woff2') format('woff2'); font-weight:300; font-display:swap; }
+@font-face { font-family:'Thmanyah Serif Display'; src:url('assets/fonts/ThmanyahSerifDisplay-Regular.woff2') format('woff2'); font-weight:400; font-display:swap; }
+@font-face { font-family:'Thmanyah Serif Display'; src:url('assets/fonts/ThmanyahSerifDisplay-Bold.woff2') format('woff2'); font-weight:700; font-display:swap; }
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #F2EDE3;
+  --bg-alt:    #E8E1D2;
+  --paper:     #FAF6EC;
+  --ink:       #1A1612;
+  --ink-soft:  #4A413A;
+  --ink-mute:  rgba(26,22,18,0.50);
+  --ink-faint: rgba(26,22,18,0.18);
+  --rule:      rgba(26,22,18,0.14);
+  --rule-soft: rgba(26,22,18,0.08);
+  --gold:      oklch(0.62 0.11 65);
+  --gold-soft: oklch(0.62 0.11 65 / 0.12);
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Thmanyah Sans', 'Inter Tight', -apple-system, sans-serif;
+  direction: rtl;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Screens ─────────────────────────────────────────────── */
+.screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+  overflow: hidden;
+}
+.screen.active {
+  opacity: 1;
+  pointer-events: all;
+  z-index: 10;
+}
+
+/* ── Screen Header ───────────────────────────────────────── */
+.screen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4vh 6vw 3vh;
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+  background: var(--paper);
+}
+.header-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(12px, 1.8vw, 18px);
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  text-align: center;
+}
+
+/* ── Screen Content ──────────────────────────────────────── */
+.screen-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 6vh 8vw;
+  gap: 3vh;
+  overflow-y: auto;
+}
+.screen-content.center {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* ── Buttons ─────────────────────────────────────────────── */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: var(--ink);
+  color: var(--bg);
+  border: none;
+  border-radius: 0;
+  padding: 5vh 10vw;
+  font-size: clamp(22px, 3.8vw, 46px);
+  font-weight: 500;
+  font-family: 'Thmanyah Sans', sans-serif;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s;
+  width: 100%;
+  max-width: 600px;
+  margin-top: 3vh;
+}
+.btn-primary::after {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 1px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.btn-primary:active { background: var(--ink-soft); transform: scale(0.98); }
+
+.btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--ink-soft);
+  border-radius: 0;
+  padding: 2.5vh 4vw;
+  font-size: clamp(13px, 2vw, 20px);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+.btn-back:active { border-color: var(--ink); color: var(--ink); }
+
+.btn-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--ink-soft);
+  border-radius: 0;
+  padding: 2.5vh 4vw;
+  font-size: clamp(13px, 2vw, 20px);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+.btn-new:active { border-color: var(--ink); color: var(--ink); }
+
+.btn-download {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--ink);
+  color: var(--bg);
+  border: none;
+  border-radius: 0;
+  padding: 3.5vh 0;
+  font-size: clamp(18px, 2.8vw, 34px);
+  font-weight: 500;
+  font-family: 'Thmanyah Sans', sans-serif;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  text-align: center;
+  width: 100%;
+  margin-top: 2vh;
+  transition: background 0.2s;
+}
+.btn-download::after {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 1px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.btn-download:active { background: var(--ink-soft); }
+
+/* ── Welcome Screen ──────────────────────────────────────── */
+.logo {
+  width: min(52vw, 300px);
+  height: auto;
+  margin-bottom: 6vh;
+  mix-blend-mode: multiply;
+  object-fit: contain;
+}
+.logo-text {
+  font-family: 'Instrument Serif', 'Thmanyah Serif Display', serif;
+  font-size: clamp(60px, 13vw, 140px);
+  font-weight: 400;
+  font-style: italic;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  margin-bottom: 5vh;
+}
+.welcome-title {
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-size: clamp(26px, 5vw, 60px);
+  font-weight: 300;
+  line-height: 1.25;
+  color: var(--ink);
+  margin-bottom: 2vh;
+}
+.welcome-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(12px, 1.8vw, 18px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-bottom: 6vh;
+}
+.welcome-sub::before {
+  content: "";
+  display: block;
+  width: 22px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.5;
+}
+.powered {
+  text-align: center;
+  padding: 3vh;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(10px, 1.4vw, 15px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+  border-top: 1px solid var(--rule);
+}
+
+/* ── WhatsApp Screen ─────────────────────────────────────── */
+.phone-panel {
+  display: contents; /* transparent in portrait — children flow normally */
+}
+.section-label {
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-size: clamp(22px, 4vw, 48px);
+  font-weight: 600;
+  color: var(--ink);
+}
+.hint {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(12px, 1.8vw, 18px);
+  letter-spacing: 0.1em;
+  color: var(--ink-mute);
+}
+
+.phone-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 3.5vh 5vw;
+  direction: ltr;
+}
+.country-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(24px, 4vw, 48px);
+  font-weight: 500;
+  color: var(--gold);
+  white-space: nowrap;
+}
+.phone-digits {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(24px, 4vw, 48px);
+  font-weight: 400;
+  letter-spacing: 8px;
+  color: var(--ink);
+  direction: ltr;
+  text-align: center;
+}
+
+.numpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5vw;
+  flex: 1;
+  direction: ltr;
+}
+.num-btn {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  height: 14vh;
+  font-size: clamp(26px, 4.5vw, 54px);
+  font-weight: 400;
+  font-family: 'Inter Tight', -apple-system, sans-serif;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.num-btn:active { background: var(--bg-alt); border-color: var(--ink-faint); }
+.num-del { color: var(--ink-mute); }
+.num-ok {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}
+.num-ok:not(:disabled):active { background: var(--ink-soft); }
+.num-ok:disabled { opacity: 0.2; pointer-events: none; }
+
+/* ── Camera Screen ───────────────────────────────────────── */
+.camera-wrap {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  overflow: hidden;
+  background: #000;
+  min-height: 0;
+}
+#cam {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.face-oval {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -54%);
+  width: 55%;
+  aspect-ratio: 3/4;
+  border: 2px solid var(--gold);
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(26,22,18,0.48);
+}
+.cam-hint {
+  position: absolute;
+  bottom: 4vh;
+  width: 100%;
+  text-align: center;
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-size: clamp(16px, 2.6vw, 32px);
+  font-weight: 400;
+  color: rgba(242,237,227,0.9);
+  text-shadow: 0 2px 12px rgba(0,0,0,0.8);
+}
+.capture-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5vh 0;
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+.btn-capture {
+  width: min(20vw, 140px);
+  height: min(20vw, 140px);
+  border-radius: 50%;
+  background: var(--ink);
+  border: 2px solid var(--rule);
+  cursor: pointer;
+  transition: transform 0.1s, background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.btn-capture:active { transform: scale(0.9); background: var(--ink-soft); }
+.capture-inner {
+  width: 74%;
+  height: 74%;
+  border-radius: 50%;
+  border: 2px solid rgba(242,237,227,0.4);
+}
+
+/* ── Processing Screen ───────────────────────────────────── */
+.spinner-wrap {
+  position: relative;
+  width: min(32vw, 180px);
+  height: min(32vw, 180px);
+  margin-bottom: 5vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.spinner {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--rule);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin 1.4s linear infinite;
+}
+.spinner-logo {
+  width: 50%;
+  height: 50%;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+  opacity: 0.4;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.processing-title {
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-size: clamp(24px, 4vw, 50px);
+  font-weight: 300;
+  color: var(--ink);
+  margin-bottom: 1.5vh;
+}
+
+/* ── Results Screen ──────────────────────────────────────── */
+.results-sub {
+  padding: 2vh 6vw;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(11px, 1.6vw, 17px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+.results-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  padding: 3px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  align-content: start;
+  background: var(--bg-alt);
+}
+.photo-card {
+  cursor: pointer;
+  position: relative;
+  background: var(--bg-alt);
+  transition: opacity 0.15s;
+}
+.photo-card:active { opacity: 0.82; }
+.photo-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.conf-pill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 18px 10px 8px;
+  background: linear-gradient(to top, rgba(26,22,18,0.72) 0%, transparent 100%);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(13px, 2vw, 20px);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: #FAF6EC;
+  text-align: center;
+}
+.no-results {
+  grid-column: span 3;
+  text-align: center;
+  padding: 14vh 4vw;
+  color: var(--ink-mute);
+  line-height: 1.8;
+}
+.no-results .nr-icon {
+  font-size: clamp(52px, 12vw, 110px);
+  display: block;
+  margin-bottom: 3vh;
+  opacity: 0.35;
+}
+.no-results p {
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-size: clamp(20px, 3.2vw, 38px);
+  font-weight: 300;
+  color: var(--ink);
+}
+.no-results small {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(11px, 1.6vw, 17px);
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+}
+
+/* ── Drive Download Bar ──────────────────────────────────── */
+.drive-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4vw;
+  padding: 2.5vh 6vw;
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+  direction: rtl;
+}
+.drive-qr-box canvas, .drive-qr-box img {
+  width: 120px !important;
+  height: 120px !important;
+  flex-shrink: 0;
+  display: block;
+}
+.drive-bar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1vh;
+}
+.drive-bar-title {
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-size: clamp(18px, 3vw, 36px);
+  font-weight: 600;
+  color: var(--ink);
+}
+.drive-bar-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(11px, 1.6vw, 16px);
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+}
+
+/* ── Photo Detail Screen ─────────────────────────────────── */
+.photo-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2vh 6vw 0;
+  gap: 3vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+}
+.full-photo {
+  width: 100%;
+  max-height: 50vh;
+  object-fit: contain;
+  background: var(--bg-alt);
+  flex-shrink: 0;
+}
+.qr-card {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 4vh 6vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2vh;
+  width: 100%;
+  flex-shrink: 0;
+}
+.qr-label {
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-size: clamp(16px, 2.6vw, 30px);
+  font-weight: 500;
+  color: var(--ink);
+  text-align: center;
+}
+.qr-hint {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(11px, 1.5vw, 16px);
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  text-align: center;
+}
+#qr-box canvas, #qr-box img {
+  width: min(52vw, 280px) !important;
+  height: min(52vw, 280px) !important;
+}
+
+/* ── Auto-reset bar ──────────────────────────────────────── */
+.reset-bar-wrap {
+  padding: 2vh 6vw 3vh;
+  flex-shrink: 0;
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+}
+.reset-bar-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(10px, 1.4vw, 15px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: center;
+  margin-bottom: 1.2vh;
+}
+.reset-bar-track {
+  height: 1px;
+  background: var(--rule);
+  overflow: hidden;
+}
+.reset-bar-fill {
+  height: 100%;
+  background: var(--gold);
+  width: 100%;
+  transition: width linear;
+}
+
+/* ── Country Picker ──────────────────────────────────────── */
+.country-code-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--rule);
+  padding: 0 4vw 0 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.country-flag {
+  font-size: clamp(24px, 4vw, 44px);
+  line-height: 1;
+}
+.country-dial {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(24px, 4vw, 48px);
+  font-weight: 500;
+  color: var(--gold);
+  white-space: nowrap;
+}
+.country-chevron {
+  font-size: clamp(14px, 2vw, 20px);
+  color: var(--ink-mute);
+}
+
+.country-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(26,22,18,0.55);
+  display: flex;
+  align-items: flex-end;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.country-picker-overlay.open {
+  opacity: 1;
+  pointer-events: all;
+}
+.country-picker-sheet {
+  width: 100%;
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
+  padding: 3vh 6vw 5vh;
+  transform: translateY(100%);
+  transition: transform 0.3s cubic-bezier(0.32,0.72,0,1);
+}
+.country-picker-overlay.open .country-picker-sheet {
+  transform: translateY(0);
+}
+.country-picker-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(11px, 1.6vw, 16px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-bottom: 2.5vh;
+  text-align: center;
+}
+.country-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2vw;
+}
+.country-option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 2.5vh 4vw;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.country-option.selected {
+  border-color: var(--ink);
+  background: var(--bg-alt);
+}
+.country-option:active { background: var(--bg-alt); }
+.country-option .flag { font-size: clamp(22px, 3.5vw, 38px); }
+.country-option .info { display: flex; flex-direction: column; gap: 2px; text-align: right; }
+.country-option .name {
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-size: clamp(16px, 2.5vw, 28px);
+  font-weight: 500;
+  color: var(--ink);
+}
+.country-option .code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(12px, 1.8vw, 18px);
+  color: var(--ink-mute);
+  letter-spacing: 0.06em;
+}
+
+/* ══════════════════════════════════════════════════════════
+   LANDSCAPE OVERRIDES — Powerology horizontal monitor
+══════════════════════════════════════════════════════════ */
+@media (orientation: landscape) {
+
+  /* ── Welcome ── */
+  #screen-welcome .screen-content {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 8vw;
+    padding: 4vh 8vw;
+  }
+  #screen-welcome .logo {
+    width: min(22vw, 220px);
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+  #screen-welcome .logo-text {
+    font-size: clamp(48px, 8vw, 100px);
+    margin-bottom: 0;
+  }
+  .welcome-title { font-size: clamp(22px, 3.5vw, 44px); margin-bottom: 1.5vh; }
+  .welcome-sub   { margin-bottom: 3vh; }
+  .btn-primary   { padding: 3.5vh 8vw; font-size: clamp(18px, 2.8vw, 36px); }
+
+  /* ── WhatsApp numpad — side by side ── */
+  #screen-whatsapp .screen-content {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+  }
+  .phone-panel {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2.5vh;
+    padding: 5vh 5vw;
+    flex: 1;
+    border-left: 1px solid var(--rule);
+  }
+  .numpad {
+    flex: none;
+    width: 52%;
+    gap: 1vh;
+    padding: 3vh 3vw;
+    align-content: center;
+  }
+  .num-btn  { height: 11vh; font-size: clamp(22px, 3.5vw, 44px); }
+  .section-label { font-size: clamp(20px, 3vw, 38px); }
+  .phone-display { padding: 2.5vh 4vw; }
+  .phone-digits  { font-size: clamp(20px, 3.2vw, 40px); }
+  .country-dial  { font-size: clamp(20px, 3.2vw, 40px); }
+
+  /* ── Camera — camera left, controls right ── */
+  #screen-selfie {
+    flex-direction: row;
+  }
+  #screen-selfie .screen-header {
+    display: none;
+  }
+  .camera-wrap {
+    width: 68%;
+    flex: none;
+    height: 100%;
+  }
+  .face-oval {
+    width: auto;
+    height: 78%;
+    aspect-ratio: 3/4;
+    transform: translate(-50%, -52%);
+  }
+  .cam-hint {
+    font-size: clamp(14px, 1.8vw, 22px);
+    bottom: 2.5vh;
+  }
+  .capture-area {
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3vh;
+    padding: 0 3vw;
+    border-top: none;
+    border-right: 1px solid var(--rule);
+  }
+  .capture-area::before {
+    content: "التقط سيلفي";
+    font-family: 'Thmanyah Sans', sans-serif;
+    font-size: clamp(16px, 2.2vw, 26px);
+    font-weight: 300;
+    color: var(--ink-mute);
+    letter-spacing: 0.04em;
+    text-align: center;
+  }
+  .capture-area::after {
+    content: "ضع وجهك داخل الإطار";
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(10px, 1.2vw, 14px);
+    letter-spacing: 0.1em;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    text-align: center;
+  }
+  .btn-capture {
+    width: min(14vw, 110px);
+    height: min(14vw, 110px);
+  }
+
+  /* ── Results — more columns ── */
+  .results-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+  .no-results { grid-column: span 5; }
+  .drive-bar { padding: 1.5vh 4vw; }
+
+  /* ── Photo detail — side by side ── */
+  .photo-detail {
+    flex-direction: row;
+    align-items: flex-start;
+    padding: 3vh 4vw;
+    gap: 4vw;
+    overflow-y: auto;
+  }
+  .full-photo {
+    width: 50%;
+    max-height: 80vh;
+    flex-shrink: 0;
+  }
+  .qr-card {
+    flex: 1;
+    min-width: 0;
+    padding: 3vh 4vw;
+  }
+
+  /* ── Headers — compact ── */
+  .screen-header { padding: 2vh 4vw; }
+  .header-title  { font-size: clamp(11px, 1.4vw, 16px); }
+  .btn-back, .btn-new { padding: 1.8vh 3vw; font-size: clamp(11px, 1.4vw, 16px); }
+}
