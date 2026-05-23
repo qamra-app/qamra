@@ -1397,7 +1397,7 @@ def _handle_whatsapp():
         _set_conv(sender, "awaiting_selfie", event_code=event_code)
         event_name = get_event(event_code)["name"]
         _sender, _event_code = sender, event_code
-        _media_bytes_captured = _media_bytes_override
+        _media_bytes_captured = None
         _media_url_captured   = media_url
 
         # Fire "searching..." in background — webhook returns 200 instantly
