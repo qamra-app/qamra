@@ -1648,7 +1648,7 @@ def _handle_whatsapp():
 
 
 def _ensure_webhook():
-    """Register Wassenger inbound webhook on startup if not already present."""
+    """Register Wassenger inbound webhook on startup, re-register if failed."""
     if not WASSENGER_API_KEY:
         return
     headers = {"Authorization": WASSENGER_API_KEY, "Content-Type": "application/json"}
@@ -1656,10 +1656,19 @@ def _ensure_webhook():
     try:
         hooks_r = requests.get("https://api.wassenger.com/v1/webhooks", headers=headers, timeout=15)
         hooks = hooks_r.json() if hooks_r.status_code == 200 else []
-        already = any(h.get("url") == webhook_url for h in (hooks if isinstance(hooks, list) else []))
-        if already:
-            print("[WEBHOOK_INIT] Webhook already registered", flush=True)
-            return
+        if isinstance(hooks, list):
+            for h in hooks:
+                if h.get("url") == webhook_url:
+                    if h.get("status") == "failed":
+                        hid = h.get("id") or h.get("_id")
+                        if hid:
+                            requests.delete(f"https://api.wassenger.com/v1/webhooks/{hid}",
+                                            headers=headers, timeout=10)
+                        print(f"[WEBHOOK_INIT] Deleted failed webhook, re-registering", flush=True)
+                        break
+                    else:
+                        print("[WEBHOOK_INIT] Webhook active", flush=True)
+                        return
         r = requests.post("https://api.wassenger.com/v1/webhooks", json={
             "name": "qamra-webhook",
             "url": webhook_url,
@@ -1672,7 +1681,18 @@ def _ensure_webhook():
     except Exception as e:
         print(f"[WEBHOOK_INIT] Error: {e}", flush=True)
 
+def _webhook_watchdog_loop():
+    """Check webhook health every hour and auto-heal if failed."""
+    time.sleep(300)
+    while True:
+        try:
+            _ensure_webhook()
+        except Exception as e:
+            print(f"[WEBHOOK_WATCHDOG] Error: {e}", flush=True)
+        time.sleep(3600)
+
 threading.Thread(target=_ensure_webhook, daemon=True).start()
+threading.Thread(target=_webhook_watchdog_loop, daemon=True).start()
 threading.Thread(target=_ensure_s3_bucket, daemon=True).start()
 
 if __name__ == "__main__":
