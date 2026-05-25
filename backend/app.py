@@ -397,7 +397,10 @@ def index_face(image_bytes, file_id, face_list_id):
         r = _session.post(f"{FACEPP_BASE}/detect",
                           data={**_fp(), "image_base64": img_b64},
                           timeout=15)
-        if r.status_code != 200 or not r.json().get("faces"):
+        if r.status_code != 200:
+            print(f"[INDEX] Detect error {r.status_code}: {r.text[:200]}", flush=True)
+            return [], 0
+        if not r.json().get("faces"):
             return [], 0
         face_tokens = [f["face_token"] for f in r.json()["faces"]]
     except Exception as e:
@@ -414,6 +417,8 @@ def index_face(image_bytes, file_id, face_list_id):
                               timeout=15)
             if r.status_code == 200:
                 persisted.extend(chunk)
+            else:
+                print(f"[INDEX] AddFace error {r.status_code}: {r.text[:200]}", flush=True)
         except Exception as e:
             print(f"[INDEX] AddFace error: {e}", flush=True)
     return persisted, len(persisted)
