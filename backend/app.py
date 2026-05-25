@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import base64
 import threading
 import hashlib
 import time
@@ -40,9 +41,9 @@ sys.stderr = _LogCapture(sys.stderr)
 WASSENGER_API_KEY  = os.environ.get("WASSENGER_API_KEY", "")
 WASSENGER_API_URL  = "https://api.wassenger.com/v1/messages"
 
-AZURE_FACE_KEY      = os.environ["AZURE_FACE_KEY"]
-AZURE_FACE_ENDPOINT = os.environ["AZURE_FACE_ENDPOINT"].rstrip("/")
-AZURE_API_BASE      = f"{AZURE_FACE_ENDPOINT}/face/v1.0"
+FACEPP_API_KEY    = os.environ.get("FACEPP_API_KEY", "")
+FACEPP_API_SECRET = os.environ.get("FACEPP_API_SECRET", "")
+FACEPP_BASE       = "https://api-us.faceplusplus.com/facepp/v3"
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 APP_URL                 = os.environ.get("APP_URL", "https://qamra-production.up.railway.app")
 ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "qamra-admin-2026")
@@ -143,12 +144,9 @@ def _find_user_for_owner(owner_phone):
     return None
 
 
-# ── Azure Face API headers ────────────────────────────────────────────────────
-def _az_headers():
-    return {"Ocp-Apim-Subscription-Key": AZURE_FACE_KEY, "Content-Type": "application/octet-stream"}
-
-def _az_json_headers():
-    return {"Ocp-Apim-Subscription-Key": AZURE_FACE_KEY, "Content-Type": "application/json"}
+# ── Face++ auth params ────────────────────────────────────────────────────────
+def _fp():
+    return {"api_key": FACEPP_API_KEY, "api_secret": FACEPP_API_SECRET}
 
 # ── Google Drive ──────────────────────────────────────────────────────────────
 def _drive(write=False):
@@ -378,97 +376,78 @@ def resize_for_azure(image_bytes):
         return image_bytes
 
 def ensure_facelist(face_list_id):
-    url = f"{AZURE_API_BASE}/largefacelists/{face_list_id}"
-    r = _session.get(url, headers=_az_json_headers(), timeout=10)
-    if r.status_code == 200:
-        return
-    r = _session.put(url, json={"name": face_list_id, "recognitionModel": "recognition_03"},
-                     headers=_az_json_headers(), timeout=10)
+    r = _session.post(f"{FACEPP_BASE}/faceset/create",
+                      data={**_fp(), "outer_id": face_list_id, "display_name": face_list_id},
+                      timeout=10)
     if r.status_code == 200:
         print(f"[FACELIST] Created: {face_list_id}", flush=True)
+    elif "FACESET_EXIST" in r.text:
+        pass  # already exists
     else:
-        print(f"[FACELIST] Create error {r.status_code}: {r.text[:200]}", flush=True)
+        print(f"[FACELIST] Create response {r.status_code}: {r.text[:200]}", flush=True)
 
 def train_facelist(face_list_id):
-    url = f"{AZURE_API_BASE}/largefacelists/{face_list_id}/train"
-    r = _session.post(url, headers=_az_json_headers(), timeout=15)
-    if r.status_code == 202:
-        print(f"[FACELIST] Training started: {face_list_id}", flush=True)
-    else:
-        print(f"[FACELIST] Train error {r.status_code}: {r.text[:200]}", flush=True)
+    pass  # Face++ doesn't require explicit training
 
 def index_face(image_bytes, file_id, face_list_id):
-    """Detect all faces in image and add each to LargeFaceList. Returns (list_of_persistedFaceIds, count)."""
+    """Detect all faces in image and add each to FaceSet. Returns (list_of_face_tokens, count)."""
     image_bytes = resize_for_azure(image_bytes)
-    detect_url  = f"{AZURE_API_BASE}/detect"
+    img_b64     = base64.b64encode(image_bytes).decode()
     try:
-        r = _session.post(detect_url,
-                          params={"detectionModel": "detection_03", "returnFaceId": "false"},
-                          data=image_bytes, headers=_az_headers(), timeout=15)
-        if r.status_code != 200 or not r.json():
+        r = _session.post(f"{FACEPP_BASE}/detect",
+                          data={**_fp(), "image_base64": img_b64},
+                          timeout=15)
+        if r.status_code != 200 or not r.json().get("faces"):
             return [], 0
-        faces = r.json()
+        face_tokens = [f["face_token"] for f in r.json()["faces"]]
     except Exception as e:
         print(f"[INDEX] Detect error: {e}", flush=True)
         return [], 0
 
-    add_url      = f"{AZURE_API_BASE}/largefacelists/{face_list_id}/persistedFaces"
-    persisted    = []
-    for face in faces:
-        rect   = face["faceRectangle"]
-        target = f"{rect['left']},{rect['top']},{rect['width']},{rect['height']}"
+    persisted = []
+    for i in range(0, len(face_tokens), 5):
+        chunk = face_tokens[i:i+5]
         try:
-            r = _session.post(add_url,
-                              params={"detectionModel": "detection_03",
-                                      "userData": file_id[:128],
-                                      "targetFace": target},
-                              data=image_bytes, headers=_az_headers(), timeout=30)
+            r = _session.post(f"{FACEPP_BASE}/faceset/addface",
+                              data={**_fp(), "outer_id": face_list_id,
+                                    "face_tokens": ",".join(chunk)},
+                              timeout=15)
             if r.status_code == 200:
-                pid = r.json().get("persistedFaceId")
-                if pid:
-                    persisted.append(pid)
+                persisted.extend(chunk)
         except Exception as e:
-            print(f"[INDEX] Add face error: {e}", flush=True)
+            print(f"[INDEX] AddFace error: {e}", flush=True)
     return persisted, len(persisted)
 
 def count_faces(image_bytes):
     image_bytes = resize_for_azure(image_bytes)
+    img_b64     = base64.b64encode(image_bytes).decode()
     try:
-        r = _session.post(f"{AZURE_API_BASE}/detect",
-                          params={"detectionModel": "detection_03", "returnFaceId": "false"},
-                          data=image_bytes, headers=_az_headers(), timeout=15)
+        r = _session.post(f"{FACEPP_BASE}/detect",
+                          data={**_fp(), "image_base64": img_b64},
+                          timeout=15)
         if r.status_code == 200:
-            return len(r.json())
+            return len(r.json().get("faces", []))
         return 1
     except Exception as e:
         print(f"[FACES] detect error: {e}", flush=True)
         return 1
 
 def search_by_selfie(selfie_bytes, face_list_id):
-    """Detect face in selfie then find similar faces in LargeFaceList."""
+    """Search FaceSet for faces matching the selfie."""
     selfie_bytes = resize_for_azure(selfie_bytes)
+    img_b64      = base64.b64encode(selfie_bytes).decode()
     try:
-        r = _session.post(f"{AZURE_API_BASE}/detect",
-                          params={"detectionModel": "detection_03", "returnFaceId": "true"},
-                          data=selfie_bytes, headers=_az_headers(), timeout=15)
-        if r.status_code != 200 or not r.json():
-            print("[SEARCH] No face detected in selfie", flush=True)
-            return []
-        face_id = r.json()[0]["faceId"]
-    except Exception as e:
-        print(f"[SEARCH] Detect error: {e}", flush=True)
-        return []
-
-    threshold = MATCH_CONF / 100.0
-    try:
-        r = _session.post(f"{AZURE_API_BASE}/findsimilars",
-                          json={"faceId": face_id, "largeFaceListId": face_list_id,
-                                "maxNumOfCandidatesReturned": 1000, "mode": "matchFace"},
-                          headers=_az_json_headers(), timeout=30)
+        r = _session.post(f"{FACEPP_BASE}/search",
+                          data={**_fp(), "outer_id": face_list_id,
+                                "image_base64": img_b64,
+                                "return_result_count": 1000},
+                          timeout=30)
         if r.status_code != 200:
-            print(f"[SEARCH] FindSimilar error {r.status_code}: {r.text[:200]}", flush=True)
+            print(f"[SEARCH] Face++ error {r.status_code}: {r.text[:200]}", flush=True)
             return []
-        matches = [m for m in r.json() if m.get("confidence", 0) >= threshold]
+        results = r.json().get("results", [])
+        matches = [{"persistedFaceId": m["face_token"], "confidence": m["confidence"] / 100.0}
+                   for m in results if m.get("confidence", 0) >= MATCH_CONF]
         print(f"[SEARCH] {len(matches)} matches in {face_list_id}", flush=True)
         return matches
     except Exception as e:
