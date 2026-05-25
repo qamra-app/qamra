@@ -337,6 +337,7 @@ def save_state(event_code, state):
     _state_cache[event_code] = state  # update memory first — instant, no API calls
     with open(_state_file(event_code), "w") as f:
         json.dump(state, f)
+    threading.Thread(target=_save_state_to_s3,   args=(event_code, state.copy()), daemon=True).start()
     threading.Thread(target=_save_state_to_drive, args=(event_code, state.copy()), daemon=True).start()
 
 # ── Conversation state ────────────────────────────────────────────────────────
@@ -371,7 +372,7 @@ def resize_for_azure(image_bytes):
         if img.width > 1920 or img.height > 1920:
             img.thumbnail((1920, 1920), Image.LANCZOS)
         out = io.BytesIO()
-        img.save(out, format="JPEG", quality=85)
+        img.save(out, format="JPEG", quality=80)
         return out.getvalue()
     except Exception as e:
         print(f"[RESIZE] {e}", flush=True)
