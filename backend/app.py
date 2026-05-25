@@ -337,7 +337,6 @@ def save_state(event_code, state):
     _state_cache[event_code] = state  # update memory first — instant, no API calls
     with open(_state_file(event_code), "w") as f:
         json.dump(state, f)
-    threading.Thread(target=_save_state_to_s3,   args=(event_code, state.copy()), daemon=True).start()
     threading.Thread(target=_save_state_to_drive, args=(event_code, state.copy()), daemon=True).start()
 
 # ── Conversation state ────────────────────────────────────────────────────────
@@ -383,7 +382,7 @@ def ensure_facelist(face_list_id):
     r = _session.get(url, headers=_az_json_headers(), timeout=10)
     if r.status_code == 200:
         return
-    r = _session.put(url, json={"name": face_list_id, "recognitionModel": "recognition_04"},
+    r = _session.put(url, json={"name": face_list_id, "recognitionModel": "recognition_03"},
                      headers=_az_json_headers(), timeout=10)
     if r.status_code == 200:
         print(f"[FACELIST] Created: {face_list_id}", flush=True)
