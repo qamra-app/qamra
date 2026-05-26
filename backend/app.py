@@ -1340,27 +1340,20 @@ def _handle_whatsapp():
         _cap_media_wid = media_wid
 
         def run():
-            selfie_bytes = _media_bytes_captured
-            if not selfie_bytes:
+            selfie_bytes = None
+
+            # Try direct URL download first (only if Wassenger included it in the webhook)
+            if _cap_media_url:
                 auth_hdrs = {"Authorization": WASSENGER_API_KEY} if WASSENGER_API_KEY else {}
-                for attempt_url in ([_media_url_captured] if _media_url_captured else []):
-                    try:
-                        r = requests.get(attempt_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
-                        print(f"[SELFIE] url download status={r.status_code} size={len(r.content)}", flush=True)
-                        if r.status_code == 200 and len(r.content) > 500:
-                            selfie_bytes = r.content
-                            break
-                        r2 = requests.get(attempt_url, timeout=20, allow_redirects=True)
-                        if r2.status_code == 200 and len(r2.content) > 500:
-                            selfie_bytes = r2.content
-                            break
-                    except Exception as e:
-                        print(f"[SELFIE] download error: {e}", flush=True)
+                try:
+                    r = requests.get(_cap_media_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
+                    print(f"[SELFIE] direct url status={r.status_code} size={len(r.content)}", flush=True)
+                    if r.status_code == 200 and len(r.content) > 500:
+                        selfie_bytes = r.content
+                except Exception as e:
+                    print(f"[SELFIE] direct url error: {e}", flush=True)
 
-            if not selfie_bytes:
-                send_msg(_sender, "⚠️ ما قدرت أحمل الصورة. جرب مرة ثانية.")
-                return
-
+            # Wassenger API lookup — always needed when webhook has no media_url
             _done = threading.Event()
             def _progress():
                 if not _done.is_set():
@@ -1369,9 +1362,7 @@ def _handle_whatsapp():
             _progress_timer.daemon = True
             _progress_timer.start()
             try:
-                selfie_bytes = None
-
-                if WASSENGER_API_KEY:
+                if not selfie_bytes and WASSENGER_API_KEY:
                     hdrs = {"Authorization": WASSENGER_API_KEY}
                     BASE = "https://api.wassenger.com"
 
