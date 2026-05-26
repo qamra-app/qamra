@@ -46,6 +46,7 @@ GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 APP_URL                 = os.environ.get("APP_URL", "https://qamra-production.up.railway.app")
 ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "qamra-admin-2026")
 OWNER_PHONE             = os.environ.get("OWNER_PHONE", "97470263297")
+GDRIVE_FOLDER_ID        = os.environ.get("GDRIVE_FOLDER_ID", "")
 
 MATCH_CONF  = 30  # InsightFace cosine similarity * 100 (ArcFace threshold ~0.30)
 MEDIA_DIR   = "/tmp/qamra_media"
@@ -196,10 +197,10 @@ def _save_events_to_drive(data):
         if fid:
             svc.files().update(fileId=fid, media_body=media).execute()
         else:
-            svc.files().create(
-                body={"name": EVENTS_DRIVE_NAME},
-                media_body=media, fields="id",
-            ).execute()
+            body = {"name": EVENTS_DRIVE_NAME}
+            if GDRIVE_FOLDER_ID:
+                body["parents"] = [GDRIVE_FOLDER_ID]
+            svc.files().create(body=body, media_body=media, fields="id").execute()
         print(f"[EVENTS] Saved {len(data)} events to Drive", flush=True)
     except Exception as e:
         print(f"[EVENTS] Drive save error: {e}", flush=True)
@@ -264,9 +265,6 @@ def _state_drive_name(event_code):
     return f"_qamra_state_{event_code}_.json"
 
 def _save_state_to_drive(event_code, data):
-    global _drive_ok
-    if not _drive_ok:
-        return
     try:
         svc     = _drive(write=True)
         name    = _state_drive_name(event_code)
@@ -281,13 +279,15 @@ def _save_state_to_drive(event_code, data):
         if files:
             svc.files().update(fileId=files[0]["id"], media_body=media).execute()
         else:
-            svc.files().create(body={"name": name}, media_body=media, fields="id").execute()
+            event = get_event(event_code)
+            folder_id = (event or {}).get("gdrive_folder_id") or GDRIVE_FOLDER_ID
+            body = {"name": name}
+            if folder_id:
+                body["parents"] = [folder_id]
+            svc.files().create(body=body, media_body=media, fields="id").execute()
         print(f"[STATE] Saved {event_code} state to Drive ({len(data.get('indexed_ids',[]))} ids)", flush=True)
     except Exception as e:
         print(f"[STATE] Drive save error: {e}", flush=True)
-        _drive_ok = False
-
-_drive_ok = True
 
 # In-memory state cache — survives loop runs, lost only on Railway restart
 # On restart, Drive is the backup. This prevents re-indexing within a session.
