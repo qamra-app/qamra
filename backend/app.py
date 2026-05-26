@@ -753,9 +753,12 @@ def search_and_send(selfie_bytes, sender, event_code):
             f"📂 جميع صورك في مجلدك الخاص:\n{folder_link}\n\n"
             "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
         )
-        time.sleep(1)
+        time.sleep(2)
         _set_conv(sender, "awaiting_rating", event_code=event_code)
-        send_msg(sender, "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*")
+        send_buttons(sender,
+            "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*",
+            ["🔄 بحث بوجه آخر"],
+        )
     except Exception as e:
         print(f"[REPLY] ERROR folder: {e}", flush=True)
         send_msg(sender, f"✅ وجدت *{count}* صورة لك من *{event['name']}* 🎉 — تواصل مع المصور لاستلامها.")
@@ -1461,20 +1464,17 @@ def _handle_whatsapp():
 
         event_code = conv.get("event_code")
         if not event_code or not get_event(event_code):
-            todays = get_todays_events()
-            if len(todays) == 1:
-                event_code = todays[0][0]
-                _set_conv(sender, "awaiting_selfie", event_code=event_code)
+            if not _events:
+                return _reply("⚠️ ما فيه حفل مسجل. تواصل مع المنظم.")
             elif len(_events) == 1:
                 event_code = next(iter(_events))
                 _set_conv(sender, "awaiting_selfie", event_code=event_code)
-            elif len(todays) > 1:
-                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(todays))
-                _set_conv(sender, "choosing_event")
-                _conv[sender]["today_events"] = [c for c, _ in todays]
-                return _reply(f"🌙 فيه أكثر من حفل اليوم، اختر الحفل الذي أنت فيه:\n\n{options}")
             else:
-                return _reply("⚠️ ما فيه حفل مسجل اليوم. تواصل مع المنظم.")
+                all_ev = list(_events.items())
+                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(all_ev))
+                _set_conv(sender, "choosing_event")
+                _conv[sender]["today_events"] = [c for c, _ in all_ev]
+                return _reply(f"🌙 لأي حفل تبحث عن صورك؟\n\n{options}")
 
         _clear_conv(sender)
         _set_conv(sender, "awaiting_selfie", event_code=event_code)
@@ -1620,28 +1620,19 @@ def _handle_whatsapp():
                          any(w in body_text for w in ("استفسار", "سؤال", "تواصل"))
 
         if picked_photos:
-            todays = get_todays_events()
-            if len(todays) == 1:
-                code, event = todays[0]
-                _set_conv(sender, "awaiting_selfie", event_code=code)
-                return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد لك جميع صورك 🎉📸" + _SELFIE_TIPS)
+            if not _events:
+                return _reply("⚠️ ما فيه حفل مسجل. تواصل مع المنظم.")
             elif len(_events) == 1:
                 code  = next(iter(_events))
                 event = _events[code]
                 _set_conv(sender, "awaiting_selfie", event_code=code)
                 return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد لك جميع صورك 🎉📸" + _SELFIE_TIPS)
-            elif len(todays) > 1:
-                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(todays))
+            else:
+                all_ev = list(_events.items())
+                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(all_ev))
                 _set_conv(sender, "choosing_event")
-                _conv[sender]["today_events"] = [c for c, _ in todays]
-                return _reply(f"🌙 فيه أكثر من حفل اليوم، اختر الحفل الذي أنت فيه:\n\n{options}")
-            _set_conv(sender, "awaiting_event_code")
-            codes = ", ".join(_events.keys()) if _events else "(لا يوجد أحداث مسجلة)"
-            return _reply(
-                "✨ ممتاز!\n\n"
-                f"أرسل لي *كود الحفل* — ستجده على QR الكود في الحفل.\n\n"
-                f"الأحداث المتاحة: {codes}"
-            )
+                _conv[sender]["today_events"] = [c for c, _ in all_ev]
+                return _reply(f"🌙 لأي حفل تبحث عن صورك؟\n\n{options}")
         elif picked_inquiry:
             _set_conv(sender, "awaiting_inquiry")
             return _reply("بكل سرور! اكتب استفسارك وسنوصله لفريق الدعم 💬")
@@ -1713,6 +1704,21 @@ def _handle_whatsapp():
             return "", 200
 
     if state == "awaiting_rating":
+        if body_text.strip() == "🔄 بحث بوجه آخر":
+            _clear_conv(sender)
+            if not _events:
+                return _reply("⚠️ ما فيه حفل مسجل. تواصل مع المنظم.")
+            elif len(_events) == 1:
+                code  = next(iter(_events))
+                event = _events[code]
+                _set_conv(sender, "awaiting_selfie", event_code=code)
+                return _reply(f"📸 أرسل لي سيلفياً جديداً وسأبحث من جديد في *{event['name']}*!" + _SELFIE_TIPS)
+            else:
+                all_ev = list(_events.items())
+                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(all_ev))
+                _set_conv(sender, "choosing_event")
+                _conv[sender]["today_events"] = [c for c, _ in all_ev]
+                return _reply(f"🌙 لأي حفل تبحث عن صورك؟\n\n{options}")
         try:
             rating = int(body_text.strip())
             if 1 <= rating <= 10:
