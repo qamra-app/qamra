@@ -187,23 +187,17 @@ def _events_drive_file_id():
         print(f"[EVENTS] Drive lookup error: {e}", flush=True)
         return None
 
-def _save_events_to_drive(data):
+def _save_events_to_vps(data):
     try:
-        svc     = _drive(write=True)
-        content = json.dumps(data, ensure_ascii=False, indent=2).encode()
-        fid     = _events_drive_file_id()
-        from googleapiclient.http import MediaInMemoryUpload
-        media = MediaInMemoryUpload(content, mimetype="application/json")
-        if fid:
-            svc.files().update(fileId=fid, media_body=media).execute()
-        else:
-            body = {"name": EVENTS_DRIVE_NAME}
-            if GDRIVE_FOLDER_ID:
-                body["parents"] = [GDRIVE_FOLDER_ID]
-            svc.files().create(body=body, media_body=media, fields="id").execute()
-        print(f"[EVENTS] Saved {len(data)} events to Drive", flush=True)
+        _session.put(
+            f"{FACE_SERVICE_URL}/v1/kv/events",
+            json={"value": json.dumps(data, ensure_ascii=False)},
+            headers=_face_hdrs(),
+            timeout=10,
+        )
+        print(f"[EVENTS] Saved {len(data)} events to VPS", flush=True)
     except Exception as e:
-        print(f"[EVENTS] Drive save error: {e}", flush=True)
+        print(f"[EVENTS] VPS save error: {e}", flush=True)
 
 def load_events():
     global _events
@@ -216,22 +210,24 @@ def load_events():
         except Exception:
             pass
     try:
-        fid = _events_drive_file_id()
-        if fid:
-            raw = download_file(fid)
-            _events = json.loads(raw)
+        r = _session.get(
+            f"{FACE_SERVICE_URL}/v1/kv/events",
+            headers=_face_hdrs(), timeout=10,
+        )
+        if r.status_code == 200:
+            _events = json.loads(r.json()["value"])
             with open(EVENTS_FILE, "w") as f:
                 json.dump(_events, f)
-            print(f"[EVENTS] Loaded {len(_events)} events from Drive", flush=True)
+            print(f"[EVENTS] Loaded {len(_events)} events from VPS", flush=True)
         else:
             print("[EVENTS] No events config found — start fresh.", flush=True)
     except Exception as e:
-        print(f"[EVENTS] Load error: {e}", flush=True)
+        print(f"[EVENTS] VPS load error: {e}", flush=True)
 
 def save_events():
     with open(EVENTS_FILE, "w") as f:
         json.dump(_events, f, ensure_ascii=False)
-    threading.Thread(target=_save_events_to_drive, args=(_events.copy(),), daemon=True).start()
+    threading.Thread(target=_save_events_to_vps, args=(_events.copy(),), daemon=True).start()
 
 def get_event(code):
     return _events.get(code.upper().strip())
@@ -264,30 +260,18 @@ def _state_file(event_code):
 def _state_drive_name(event_code):
     return f"_qamra_state_{event_code}_.json"
 
-def _save_state_to_drive(event_code, data):
+def _save_state_to_vps(event_code, data):
     try:
-        svc     = _drive(write=True)
-        name    = _state_drive_name(event_code)
-        content = json.dumps(data, ensure_ascii=False).encode()
-        from googleapiclient.http import MediaInMemoryUpload
-        media = MediaInMemoryUpload(content, mimetype="application/json")
-        resp  = svc.files().list(
-            q=f"name='{name}' and trashed=false",
-            fields="files(id)", pageSize=1,
-        ).execute()
-        files = resp.get("files", [])
-        if files:
-            svc.files().update(fileId=files[0]["id"], media_body=media).execute()
-        else:
-            event = get_event(event_code)
-            folder_id = (event or {}).get("gdrive_folder_id") or GDRIVE_FOLDER_ID
-            body = {"name": name}
-            if folder_id:
-                body["parents"] = [folder_id]
-            svc.files().create(body=body, media_body=media, fields="id").execute()
-        print(f"[STATE] Saved {event_code} state to Drive ({len(data.get('indexed_ids',[]))} ids)", flush=True)
+        key = f"state_{event_code}"
+        _session.put(
+            f"{FACE_SERVICE_URL}/v1/kv/{key}",
+            json={"value": json.dumps(data, ensure_ascii=False)},
+            headers=_face_hdrs(),
+            timeout=10,
+        )
+        print(f"[STATE] Saved {event_code} to VPS ({len(data.get('indexed_ids',[]))} ids)", flush=True)
     except Exception as e:
-        print(f"[STATE] Drive save error: {e}", flush=True)
+        print(f"[STATE] VPS save error: {e}", flush=True)
 
 # In-memory state cache — survives loop runs, lost only on Railway restart
 # On restart, Drive is the backup. This prevents re-indexing within a session.
@@ -308,23 +292,20 @@ def load_state(event_code):
     except Exception:
         pass
     try:
-        name = _state_drive_name(event_code)
-        svc  = _drive()
-        resp = svc.files().list(
-            q=f"name='{name}' and trashed=false",
-            fields="files(id)", pageSize=1,
-        ).execute()
-        files = resp.get("files", [])
-        if files:
-            raw = download_file(files[0]["id"])
-            s   = json.loads(raw)
+        key = f"state_{event_code}"
+        r   = _session.get(
+            f"{FACE_SERVICE_URL}/v1/kv/{key}",
+            headers=_face_hdrs(), timeout=10,
+        )
+        if r.status_code == 200:
+            s = json.loads(r.json()["value"])
             with open(path, "w") as f:
                 json.dump(s, f)
             _state_cache[event_code] = s
-            print(f"[STATE] Loaded {event_code} from Drive ({len(s.get('indexed_ids',[]))} ids)", flush=True)
+            print(f"[STATE] Loaded {event_code} from VPS ({len(s.get('indexed_ids',[]))} ids)", flush=True)
             return s
     except Exception as e:
-        print(f"[STATE] Drive load error: {e}", flush=True)
+        print(f"[STATE] VPS load error: {e}", flush=True)
     empty = {"indexed_ids": [], "file_map": {}, "face_map": {}}
     _state_cache[event_code] = empty
     return empty
@@ -333,7 +314,7 @@ def save_state(event_code, state):
     _state_cache[event_code] = state  # update memory first — instant, no API calls
     with open(_state_file(event_code), "w") as f:
         json.dump(state, f)
-    threading.Thread(target=_save_state_to_drive, args=(event_code, state.copy()), daemon=True).start()
+    threading.Thread(target=_save_state_to_vps, args=(event_code, state.copy()), daemon=True).start()
 
 # ── Conversation state ────────────────────────────────────────────────────────
 # { phone: { "state": str, "event_code": str|None, "ts": float } }
