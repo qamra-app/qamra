@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  face-service:
+    build: .
+    image: qamra-face-service
+    container_name: face-service
+    restart: always
+    ports:
+      - "5001:5001"
+    volumes:
+      - face_data:/data
+      - ./app.py:/app/app.py:ro
+    environment:
+      - FACE_API_KEY=qamra-face-2026
+      - DB_PATH=/data/faces.db
+      - INSIGHTFACE_HOME=/app/models
+
+volumes:
+  face_data:
+    driver: local
