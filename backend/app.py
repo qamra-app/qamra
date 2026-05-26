@@ -596,6 +596,33 @@ def create_guest_folder(sender_label, file_ids, event_name):
     print(f"[FOLDER] Created: {link} ({len(file_ids)} shortcuts)", flush=True)
     return link
 
+_SELFIE_TIPS = (
+    "\n\n*نصائح للحصول على أفضل نتيجة:*\n"
+    "• أنت وحدك في الصورة 🙋\n"
+    "• وجهك واضح ومضاء جيداً 💡\n"
+    "• الكاميرا في مستوى وجهك 📱\n"
+    "• تجنب النظارات الشمسية 🕶️"
+)
+
+# ── Ratings ───────────────────────────────────────────────────────────────────
+def save_rating(event_code, phone, rating, comment=""):
+    key = f"ratings_{event_code}"
+    try:
+        r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/{key}", headers=_face_hdrs(), timeout=10)
+        ratings = json.loads(r.json()["value"]) if r.status_code == 200 else []
+    except Exception:
+        ratings = []
+    ratings.append({"phone": phone, "rating": rating, "comment": comment, "ts": time.time()})
+    try:
+        _session.put(
+            f"{FACE_SERVICE_URL}/v1/kv/{key}",
+            json={"value": json.dumps(ratings, ensure_ascii=False)},
+            headers=_face_hdrs(), timeout=10,
+        )
+        print(f"[RATING] {phone} rated {rating}/10 for {event_code}", flush=True)
+    except Exception as e:
+        print(f"[RATING] Save error: {e}", flush=True)
+
 # ── WhatsApp search + send ────────────────────────────────────────────────────
 def search_and_send(selfie_bytes, sender, event_code):
     print(f"[SEARCH] start sender={sender} event={event_code} selfie_size={len(selfie_bytes)}", flush=True)
@@ -644,6 +671,9 @@ def search_and_send(selfie_bytes, sender, event_code):
             f"📂 جميع صورك في مجلدك الخاص:\n{folder_link}\n\n"
             "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
         )
+        time.sleep(1)
+        _set_conv(sender, "awaiting_rating", event_code=event_code)
+        send_msg(sender, "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*")
     except Exception as e:
         print(f"[REPLY] ERROR folder: {e}", flush=True)
         send_msg(sender, f"✅ وجدت *{count}* صورة لك من *{event['name']}* 🎉 — تواصل مع المصور لاستلامها.")
@@ -1081,6 +1111,20 @@ def admin_delete_event(code):
         save_events()
     return jsonify({"status": "deleted", "event": code}), 200
 
+@app.route("/admin/ratings", methods=["GET"])
+def admin_ratings():
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    all_ratings = {}
+    for code in _events:
+        key = f"ratings_{code}"
+        try:
+            r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/{key}", headers=_face_hdrs(), timeout=10)
+            all_ratings[code] = json.loads(r.json()["value"]) if r.status_code == 200 else []
+        except Exception:
+            all_ratings[code] = []
+    return jsonify(all_ratings), 200
+
 @app.route("/admin/logs", methods=["GET"])
 def admin_logs():
     token = request.args.get("token", "")
@@ -1471,7 +1515,7 @@ def _handle_whatsapp():
                 chosen = today_list[idx]
                 event  = get_event(chosen)
                 _set_conv(sender, "awaiting_selfie", event_code=chosen)
-                return _reply(f"✨ اخترت *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد صورك 📸")
+                return _reply(f"✨ اخترت *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد صورك 📸" + _SELFIE_TIPS)
         except (ValueError, TypeError):
             pass
         options = "\n".join(f"*{i+1}* — {get_event(c)['name']}" for i, c in enumerate(today_list))
@@ -1498,12 +1542,12 @@ def _handle_whatsapp():
             if len(todays) == 1:
                 code, event = todays[0]
                 _set_conv(sender, "awaiting_selfie", event_code=code)
-                return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك 🎉📸")
+                return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد لك جميع صورك 🎉📸" + _SELFIE_TIPS)
             elif len(_events) == 1:
                 code  = next(iter(_events))
                 event = _events[code]
                 _set_conv(sender, "awaiting_selfie", event_code=code)
-                return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي واضح* لوجهك وسأجد لك جميع صورك 🎉📸")
+                return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد لك جميع صورك 🎉📸" + _SELFIE_TIPS)
             elif len(todays) > 1:
                 options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(todays))
                 _set_conv(sender, "choosing_event")
@@ -1532,7 +1576,7 @@ def _handle_whatsapp():
     if state == "awaiting_selfie":
         event_name = get_event(conv.get("event_code", ""))
         name = event_name["name"] if event_name else "الحفل"
-        return _reply(f"📸 أرسل لي *سيلفي* لوجهك وسأجد صورك من {name}!")
+        return _reply(f"📸 أرسل لي *سيلفي* لوجهك وسأجد صورك من {name}!" + _SELFIE_TIPS)
 
     if state == "awaiting_inquiry":
         # First message → start bidirectional agent session
@@ -1585,6 +1629,26 @@ def _handle_whatsapp():
             _clear_conv(sender)
             threading.Thread(target=send_buttons, args=(sender, "🌙 انتهت جلسة الدعم. كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
             return "", 200
+
+    if state == "awaiting_rating":
+        try:
+            rating = int(body_text.strip())
+            if 1 <= rating <= 10:
+                _set_conv(sender, "awaiting_comment", event_code=conv.get("event_code"))
+                _conv[sender]["pending_rating"] = rating
+                return _reply(f"{'⭐' * rating}\n\nشكراً على تقييمك! 🙏\n\nهل تودّ إضافة تعليق؟ اكتبه الآن أو أرسل *تخطي*")
+        except (ValueError, TypeError):
+            pass
+        return _reply("من فضلك أرسل رقماً من *1* إلى *10* ⭐")
+
+    if state == "awaiting_comment":
+        event_code = conv.get("event_code", "DEFAULT")
+        rating     = _conv.get(sender, {}).get("pending_rating", 0)
+        skip       = body_text.strip() in ("تخطي", "skip", "لا", "no", "-")
+        comment    = "" if skip else body_text.strip()
+        threading.Thread(target=save_rating, args=(event_code, sender, rating, comment), daemon=True).start()
+        _clear_conv(sender)
+        return _reply("✅ تم حفظ تقييمك، شكراً جزيلاً! 🌙\n\nنراك في المرة القادمة 🎉")
 
     # Fallback
     _clear_conv(sender)
