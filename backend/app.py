@@ -161,6 +161,12 @@ def _find_user_for_owner(owner_phone):
 
 
 # ── Face service auth header ──────────────────────────────────────────────────
+def _event_btn_label(name: str) -> str:
+    """Return a short button label (≤20 chars) from a full event name."""
+    parts = name.strip().split()
+    two = " ".join(parts[-2:])
+    return (two if len(two) <= 20 else parts[-1])[:20]
+
 def _face_hdrs():
     return {"X-API-Key": FACE_SERVICE_KEY}
 
@@ -746,6 +752,8 @@ def search_and_send(selfie_bytes, sender, event_code):
         for fid in teaser_ids:
             send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}")
             time.sleep(0.5)
+
+        send_msg(sender, "⏳ جاري تجهيز مجلد صورك الخاص، لحظة واحدة... 🗂️")
 
         guest_num   = get_next_guest_number(event_code)
         folder_link  = create_guest_folder(guest_num, file_ids, event["name"], file_map)
@@ -1450,6 +1458,10 @@ def _handle_whatsapp():
         threading.Thread(target=send_msg, args=(sender, text), kwargs={"media_url": murl}, daemon=True).start()
         return "", 200
 
+    def _reply_buttons(body, buttons):
+        threading.Thread(target=send_buttons, args=(sender, body, buttons), daemon=True).start()
+        return "", 200
+
     if not sender:
         return "", 200
 
@@ -1492,10 +1504,10 @@ def _handle_whatsapp():
                 _set_conv(sender, "awaiting_selfie", event_code=event_code)
             else:
                 all_ev = list(_events.items())
-                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(all_ev))
                 _set_conv(sender, "choosing_event")
                 _conv[sender]["today_events"] = [c for c, _ in all_ev]
-                return _reply(f"🌙 لأي حفل تبحث عن صورك؟\n\n{options}")
+                btn_labels = [_event_btn_label(e["name"]) for _, e in all_ev[:3]]
+                return _reply_buttons("🌙 لأي حفل تبحث عن صورك؟", btn_labels)
 
         _clear_conv(sender)
         _set_conv(sender, "awaiting_selfie", event_code=event_code)
@@ -1518,9 +1530,11 @@ def _handle_whatsapp():
 
             # Try direct URL download first (only if Wassenger included it in the webhook)
             if _cap_media_url:
+                _wa_base = "https://api.wassenger.com"
+                _abs_url = (_wa_base + _cap_media_url) if _cap_media_url.startswith("/") else _cap_media_url
                 auth_hdrs = {"Authorization": WASSENGER_API_KEY} if WASSENGER_API_KEY else {}
                 try:
-                    r = requests.get(_cap_media_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
+                    r = requests.get(_abs_url, headers=auth_hdrs, timeout=20, allow_redirects=True)
                     print(f"[SELFIE] direct url status={r.status_code} size={len(r.content)}", flush=True)
                     if r.status_code == 200 and len(r.content) > 500:
                         selfie_bytes = r.content
@@ -1543,7 +1557,7 @@ def _handle_whatsapp():
                     def _abs(u):
                         return (BASE + u) if u and u.startswith("/") else u
 
-                    _mu = _cap_media_url
+                    _mu = _abs(_cap_media_url) if _cap_media_url else ""
                     _mw = _cap_media_wid
 
                     if not _mu:
@@ -1612,17 +1626,27 @@ def _handle_whatsapp():
 
     if state == "choosing_event":
         today_list = conv.get("today_events", [])
-        try:
-            idx = int(body_text.strip()) - 1
-            if 0 <= idx < len(today_list):
-                chosen = today_list[idx]
-                event  = get_event(chosen)
-                _set_conv(sender, "awaiting_selfie", event_code=chosen)
-                return _reply(f"✨ اخترت *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد صورك 📸" + _SELFIE_TIPS)
-        except (ValueError, TypeError):
-            pass
-        options = "\n".join(f"*{i+1}* — {get_event(c)['name']}" for i, c in enumerate(today_list))
-        return _reply(f"أرسل رقم الحفل:\n\n{options}")
+        chosen = None
+        # Match by button label (interactive tap)
+        for code in today_list:
+            ev = get_event(code)
+            if ev and body_text.strip() == _event_btn_label(ev["name"]):
+                chosen = code
+                break
+        # Fallback: match by number
+        if chosen is None:
+            try:
+                idx = int(body_text.strip()) - 1
+                if 0 <= idx < len(today_list):
+                    chosen = today_list[idx]
+            except (ValueError, TypeError):
+                pass
+        if chosen:
+            event = get_event(chosen)
+            _set_conv(sender, "awaiting_selfie", event_code=chosen)
+            return _reply(f"✨ اخترت *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد صورك 📸" + _SELFIE_TIPS)
+        btn_labels = [_event_btn_label(get_event(c)["name"]) for c in today_list if get_event(c)]
+        return _reply_buttons("اختر الحفل:", btn_labels)
 
     if state in ("new", "routing") and any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start", "مرحبً")):
         _clear_conv(sender)
@@ -1650,10 +1674,10 @@ def _handle_whatsapp():
                 return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد لك جميع صورك 🎉📸" + _SELFIE_TIPS)
             else:
                 all_ev = list(_events.items())
-                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(all_ev))
                 _set_conv(sender, "choosing_event")
                 _conv[sender]["today_events"] = [c for c, _ in all_ev]
-                return _reply(f"🌙 لأي حفل تبحث عن صورك؟\n\n{options}")
+                btn_labels = [_event_btn_label(e["name"]) for _, e in all_ev[:3]]
+                return _reply_buttons("🌙 لأي حفل تبحث عن صورك؟", btn_labels)
         elif picked_inquiry:
             _set_conv(sender, "awaiting_inquiry")
             return _reply("بكل سرور! اكتب استفسارك وسنوصله لفريق الدعم 💬")
@@ -1736,10 +1760,10 @@ def _handle_whatsapp():
                 return _reply(f"📸 أرسل لي سيلفياً جديداً وسأبحث من جديد في *{event['name']}*!" + _SELFIE_TIPS)
             else:
                 all_ev = list(_events.items())
-                options = "\n".join(f"*{i+1}* — {e['name']}" for i, (_, e) in enumerate(all_ev))
                 _set_conv(sender, "choosing_event")
                 _conv[sender]["today_events"] = [c for c, _ in all_ev]
-                return _reply(f"🌙 لأي حفل تبحث عن صورك؟\n\n{options}")
+                btn_labels = [_event_btn_label(e["name"]) for _, e in all_ev[:3]]
+                return _reply_buttons("🌙 لأي حفل تبحث عن صورك؟", btn_labels)
         try:
             rating = int(body_text.strip())
             if 1 <= rating <= 10:
