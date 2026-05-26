@@ -4,7 +4,8 @@
 ═══════════════════════════════════════════════════════════ */
 
 const App = (() => {
-  const RESET_SEC = 60;
+  const RESET_SEC  = 60;
+  const EVENT_CODE = "DEFAULT";
 
   const COUNTRIES = [
     { dial: "+974", flag: "🇶🇦", name: "قطر",      digits: 8 },
@@ -320,6 +321,7 @@ const App = (() => {
     try {
       const form = new FormData();
       form.append("photo", blob, "selfie.jpg");
+      form.append("event_code", EVENT_CODE);
       const res  = await fetch("/api/match", { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) {
