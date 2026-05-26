@@ -931,16 +931,23 @@ def match_api():
             guest_num = get_next_guest_number(event_code)
             url       = create_guest_folder(guest_num, file_ids, event["name"], file_map)
             _folder_cache[session_id] = url
-            # Persist to VPS KV so URL survives Railway restarts
-            try:
-                _session.put(
-                    f"{FACE_SERVICE_URL}/v1/kv/folder_{session_id}",
-                    json={"value": url},
-                    headers=_face_hdrs(), timeout=5,
-                )
-            except Exception:
-                pass
-            print(f"[FOLDER] Done session={session_id} files={len(file_ids)}", flush=True)
+            # Persist to VPS KV so URL survives Railway restarts — retry up to 3x
+            saved = False
+            for _attempt in range(3):
+                try:
+                    r_kv = _session.put(
+                        f"{FACE_SERVICE_URL}/v1/kv/folder_{session_id}",
+                        json={"value": url},
+                        headers=_face_hdrs(), timeout=15,
+                    )
+                    if r_kv.status_code == 200:
+                        saved = True
+                        break
+                    print(f"[FOLDER] KV save attempt {_attempt+1} status={r_kv.status_code}", flush=True)
+                except Exception as kv_e:
+                    print(f"[FOLDER] KV save attempt {_attempt+1} error: {kv_e}", flush=True)
+                time.sleep(2)
+            print(f"[FOLDER] Done session={session_id} files={len(file_ids)} kv_saved={saved}", flush=True)
         except Exception as e:
             _folder_cache[session_id] = ""
             print(f"[FOLDER] Error session={session_id}: {e}", flush=True)
