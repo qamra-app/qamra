@@ -93,6 +93,22 @@ def send_buttons(to, body, buttons):
     send_msg(to, f"{body}\n\n{numbered}")
 
 
+# ── Duplicate webhook deduplication ──────────────────────────────────────────
+_seen_msg_ids: dict = {}  # msg_id -> timestamp
+_seen_lock = threading.Lock()
+
+def _is_duplicate_msg(msg_id: str) -> bool:
+    if not msg_id:
+        return False
+    now = time.time()
+    with _seen_lock:
+        for k in [k for k, t in list(_seen_msg_ids.items()) if now - t > 60]:
+            del _seen_msg_ids[k]
+        if msg_id in _seen_msg_ids:
+            return True
+        _seen_msg_ids[msg_id] = now
+    return False
+
 # ── Human agent session tracking ──────────────────────────────────────────────
 # Maps user_phone → { "owner": owner_phone, "ts": float }
 _agent_sessions: dict = {}
@@ -614,10 +630,18 @@ def search_and_send(selfie_bytes, sender, event_code):
     count = len(file_ids)
 
     try:
+        import random
         phone_label = sender.replace("whatsapp:", "").replace("+", "")
+
+        # Send 2–3 teaser photos before the folder link
+        teaser_ids = random.sample(file_ids, min(3, len(file_ids)))
+        send_msg(sender, f"🎉 وجدت *{count}* صورة لك من *{event['name']}*! إليك بعض منها:")
+        for fid in teaser_ids:
+            send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}")
+            time.sleep(0.5)
+
         folder_link = create_guest_folder(phone_label, file_ids, event["name"])
         send_msg(sender,
-            f"✅ وجدت *{count}* صورة لك من *{event['name']}* 🎉\n\n"
             f"📂 جميع صورك في مجلدك الخاص:\n{folder_link}\n\n"
             "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
         )
@@ -1269,6 +1293,10 @@ def _handle_whatsapp():
     print(f"[MEDIA] msg_id={msg_id!r} device_id={device_id!r} msg_link={msg_link!r} media_wid={media_wid!r} media_url={media_url!r} has_media={has_media}", flush=True)
     print(f"[WH] sender={sender} type={msg_type} has_media={has_media} media_url={media_url!r}", flush=True)
 
+    if _is_duplicate_msg(msg_id):
+        print(f"[WH] duplicate msg_id={msg_id}, ignoring", flush=True)
+        return "", 200
+
     def _reply(text, murl=None):
         threading.Thread(target=send_msg, args=(sender, text), kwargs={"media_url": murl}, daemon=True).start()
         return "", 200
@@ -1457,10 +1485,7 @@ def _handle_whatsapp():
 
     if state == "new":
         _set_conv(sender, "routing")
-        send_buttons(sender,
-            "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
-            ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-        )
+        threading.Thread(target=send_buttons, args=(sender, "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
         return "", 200
 
     if state == "routing":
