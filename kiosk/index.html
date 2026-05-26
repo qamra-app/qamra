@@ -30,7 +30,7 @@
         <span>←</span> رجوع
       </button>
       <span class="header-title">رقم واتساب</span>
-      <div style="width:160px"></div>
+      <button class="btn-skip" onclick="App.skipPhone()">تخطي ←</button>
     </div>
     <div class="screen-content">
       <div class="phone-panel">
@@ -73,13 +73,15 @@
     </div>
     <div class="camera-wrap">
       <video id="cam" autoplay playsinline muted></video>
-      <div class="face-oval"></div>
-      <p class="cam-hint">ضع وجهك داخل الإطار</p>
+      <div class="face-oval" id="face-oval"></div>
+      <div class="cam-countdown" id="cam-countdown"></div>
+      <p class="cam-hint" id="cam-hint">ثبّت وجهك داخل الإطار</p>
     </div>
     <div class="capture-area">
       <button class="btn-capture" onclick="App.snap()">
         <div class="capture-inner"></div>
       </button>
+      <p class="capture-hint">أو اضغط للتصوير يدوياً</p>
     </div>
   </div>
 

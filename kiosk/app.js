@@ -30,6 +30,15 @@ const App = (() => {
   let countTimer  = null;
   let history     = [];
 
+  // ── Auto-capture state ─────────────────────────────────
+  let _detectTimer  = null;
+  let _stillStart   = null;
+  let _prevPixels   = null;
+  let _detectCanvas = null;
+  let _detectCtx    = null;
+  const CAPTURE_MS  = 3000;  // hold still for 3 s
+  const MOTION_THR  = 8;     // avg per-channel pixel diff = "still"
+
   // ── Screens ────────────────────────────────────────────
   function show(id) {
     document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
@@ -42,6 +51,8 @@ const App = (() => {
   }
 
   function start() {
+    // Request fullscreen on first user gesture
+    try { document.documentElement.requestFullscreen().catch(() => {}); } catch(_) {}
     phone   = "";
     country = COUNTRIES[0];
     history = ["screen-welcome"];
@@ -144,8 +155,17 @@ const App = (() => {
 
   async function confirmPhone() {
     if (phone.length < country.digits) return;
-    push("screen-selfie");                               // show screen first — Chrome needs visible element
-    await new Promise(r => requestAnimationFrame(r));   // let browser render before touching camera
+    await _goToSelfie();
+  }
+
+  async function skipPhone() {
+    phone = "";
+    await _goToSelfie();
+  }
+
+  async function _goToSelfie() {
+    push("screen-selfie");
+    await new Promise(r => requestAnimationFrame(r));
     await openCamera();
   }
 
@@ -185,12 +205,100 @@ const App = (() => {
     } catch (e) {
       console.error("[CAM play]", e);
     }
+    // Give camera 1 s to settle before starting auto-capture
+    setTimeout(startAutoCapture, 1000);
   }
 
   function stopCamera() {
+    stopAutoCapture();
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     const cam = document.getElementById("cam");
     if (cam) cam.srcObject = null;
+  }
+
+  // ── Auto-capture ───────────────────────────────────────
+  function startAutoCapture() {
+    if (!stream) return;
+    if (!_detectCanvas) {
+      _detectCanvas = document.createElement('canvas');
+      _detectCanvas.width  = 80;
+      _detectCanvas.height = 80;
+      _detectCtx = _detectCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    _stillStart  = null;
+    _prevPixels  = null;
+    _scheduleDetect();
+  }
+
+  function stopAutoCapture() {
+    if (_detectTimer) { clearTimeout(_detectTimer); _detectTimer = null; }
+    _stillStart = null;
+    _prevPixels = null;
+    const oval      = document.getElementById('face-oval');
+    const countdown = document.getElementById('cam-countdown');
+    const hint      = document.getElementById('cam-hint');
+    if (oval)      oval.classList.remove('locking');
+    if (countdown) countdown.textContent = '';
+    if (hint)      hint.textContent = 'ثبّت وجهك داخل الإطار';
+  }
+
+  function _scheduleDetect() {
+    _detectTimer = setTimeout(_detect, 300);
+  }
+
+  function _detect() {
+    const video = document.getElementById('cam');
+    if (!video || !stream) return;
+
+    // Sample the oval region (center 50% width, 80% height of frame)
+    const sx = video.videoWidth  * 0.25;
+    const sy = video.videoHeight * 0.10;
+    const sw = video.videoWidth  * 0.50;
+    const sh = video.videoHeight * 0.80;
+    _detectCtx.drawImage(video, sx, sy, sw, sh, 0, 0, 80, 80);
+    const pixels = _detectCtx.getImageData(0, 0, 80, 80).data;
+
+    let isStill = false;
+    if (_prevPixels) {
+      let diff = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        diff += Math.abs(pixels[i]   - _prevPixels[i])
+              + Math.abs(pixels[i+1] - _prevPixels[i+1])
+              + Math.abs(pixels[i+2] - _prevPixels[i+2]);
+      }
+      isStill = (diff / (80 * 80 * 3)) < MOTION_THR;
+    }
+    _prevPixels = new Uint8ClampedArray(pixels);
+
+    const oval      = document.getElementById('face-oval');
+    const countdown = document.getElementById('cam-countdown');
+    const hint      = document.getElementById('cam-hint');
+
+    if (isStill) {
+      if (!_stillStart) _stillStart = Date.now();
+      const elapsed   = Date.now() - _stillStart;
+      const remaining = Math.ceil((CAPTURE_MS - elapsed) / 1000);
+      if (oval)      oval.classList.add('locking');
+      if (countdown) countdown.textContent = remaining > 0 ? remaining : '';
+      if (hint)      hint.textContent = '';
+      if (elapsed >= CAPTURE_MS) {
+        stopAutoCapture();
+        snap();
+        return;
+      }
+    } else {
+      _stillStart = null;
+      if (oval)      oval.classList.remove('locking');
+      if (countdown) countdown.textContent = '';
+      if (hint)      hint.textContent = 'ثبّت وجهك داخل الإطار';
+    }
+
+    _scheduleDetect();
+  }
+
+  function retryCamera() {
+    show("screen-selfie");
+    openCamera();
   }
 
   function snap() {
@@ -252,10 +360,11 @@ const App = (() => {
           <span class="nr-icon">😕</span>
           <p>ما لقينا صورك هذي المرة</p>
           <small>تأكد أن السيلفي واضح وحاول مرة ثانية</small>
+          <button class="btn-retry" onclick="App.retryCamera()">📸 حاول مرة ثانية</button>
         </div>`;
     } else {
       label.textContent = totalMatches > 21
-        ? `وجدنا أكثر من 21 صورة — امسح الـ QR للحصول على كل صورك`
+        ? `وجدنا الكثير من صورك 🎉`
         : `وجدنا ${matches.length} صورة`;
       matches.forEach((m, i) => {
         const card = document.createElement("div");
@@ -401,5 +510,5 @@ const App = (() => {
   }
 
   // ── Public API ─────────────────────────────────────────
-  return { start, goBack, backToResults, reset, digit, del, confirmPhone, snap, openCountryPicker, closeCountryPicker };
+  return { start, goBack, backToResults, reset, digit, del, confirmPhone, skipPhone, snap, openCountryPicker, closeCountryPicker, retryCamera };
 })();

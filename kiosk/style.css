@@ -127,6 +127,23 @@ html, body {
 }
 .btn-primary:active { background: var(--ink-soft); transform: scale(0.98); }
 
+.btn-skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--ink-mute);
+  padding: 2.5vh 4vw;
+  font-size: clamp(13px, 2vw, 20px);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.2s;
+}
+.btn-skip:active { color: var(--ink); }
+
 .btn-back {
   display: inline-flex;
   align-items: center;
@@ -354,6 +371,33 @@ html, body {
   border-radius: 50%;
   pointer-events: none;
   box-shadow: 0 0 0 9999px rgba(26,22,18,0.48);
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.face-oval.locking {
+  border-color: #fff;
+  border-width: 3px;
+  box-shadow: 0 0 0 9999px rgba(26,22,18,0.48), 0 0 24px 4px rgba(255,255,255,0.5);
+}
+.cam-countdown {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -54%);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(72px, 16vw, 160px);
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 2px 24px rgba(0,0,0,0.9);
+  pointer-events: none;
+  z-index: 2;
+  line-height: 1;
+}
+.capture-hint {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(10px, 1.4vw, 14px);
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+  text-align: center;
+  margin-top: 1.5vh;
 }
 .cam-hint {
   position: absolute;
@@ -457,14 +501,16 @@ html, body {
   position: relative;
   background: var(--bg-alt);
   transition: opacity 0.15s;
-  aspect-ratio: 1;
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28vw;
 }
 .photo-card:active { opacity: 0.82; }
 .photo-card img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 .conf-pill {
@@ -500,6 +546,22 @@ html, body {
   font-weight: 300;
   color: var(--ink);
 }
+.btn-retry {
+  margin-top: 3vh;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--ink);
+  color: var(--bg);
+  border: none;
+  padding: 2.5vh 6vw;
+  font-size: clamp(16px, 2.4vw, 28px);
+  font-family: 'Thmanyah Sans', sans-serif;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-retry:active { background: var(--ink-soft); }
 .no-results small {
   font-family: 'JetBrains Mono', monospace;
   font-size: clamp(11px, 1.6vw, 17px);
@@ -805,11 +867,14 @@ html, body {
     width: min(14vw, 110px);
     height: min(14vw, 110px);
   }
+  .capture-hint { font-size: clamp(9px, 1.1vw, 13px); margin-top: 1vh; }
+  .cam-countdown { font-size: clamp(60px, 12vw, 130px); }
 
   /* ── Results — more columns ── */
   .results-grid {
     grid-template-columns: repeat(5, 1fr);
   }
+  .photo-card { height: 18vw; }
   .no-results { grid-column: span 5; }
   .drive-bar { padding: 1.5vh 4vw; }
 
