@@ -1221,6 +1221,12 @@ def gallery_zip(event_code, token):
     )
 
 
+@app.route("/gallery/<event_code>/count", methods=["GET"])
+def gallery_count(event_code):
+    state = load_state(event_code.upper())
+    return jsonify({"count": len(state.get("indexed_ids", []))}), 200
+
+
 @app.route("/gallery/<event_code>/all", methods=["GET"])
 def gallery_all(event_code):
     event = get_event(event_code.upper())
@@ -1293,9 +1299,20 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 .lightbox-footer{{display:flex;align-items:center;gap:14px;padding-top:16px}}
 .btn-lb-save{{display:inline-flex;align-items:center;gap:8px;background:var(--gold);color:var(--ink);border:none;padding:11px 24px;font-family:'Inter Tight',sans-serif;font-size:14px;font-weight:500;cursor:pointer;text-decoration:none}}
 .footer{{text-align:center;padding:28px 16px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);border-top:1px solid var(--rule);background:var(--paper)}}
+.new-banner{{
+  display:none;position:sticky;top:0;z-index:100;
+  background:var(--ink);color:var(--bg);
+  padding:14px 20px;text-align:center;cursor:pointer;
+  font-family:'Inter Tight',sans-serif;font-size:14px;font-weight:500;
+  letter-spacing:.02em;border-bottom:2px solid var(--gold);
+  animation:slide-down .3s ease;
+}}
+@keyframes slide-down{{from{{transform:translateY(-100%)}}to{{transform:translateY(0)}}}}
+.new-banner:active{{background:var(--ink-soft)}}
 </style>
 </head>
 <body>
+<div class="new-banner" id="new-banner" onclick="location.reload()"></div>
 <div class="header">
   <div class="header-brand">QAMRA</div>
   <div class="header-event">{event['name']}</div>
@@ -1376,6 +1393,21 @@ async function loadMore() {{
 }}
 
 addPhotos(loadedIds);
+
+// Poll for new photos every 30 seconds
+let knownCount = {total};
+setInterval(async () => {{
+  try {{
+    const r = await fetch(APP_URL + '/gallery/' + EVENT_CODE + '/count');
+    const d = await r.json();
+    if (d.count > knownCount) {{
+      const diff = d.count - knownCount;
+      const banner = document.getElementById('new-banner');
+      banner.textContent = diff + ' صور جديدة متاحة — اضغط لعرضها';
+      banner.style.display = 'block';
+    }}
+  }} catch(_) {{}}
+}}, 30000);
 </script>
 </body></html>"""
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
