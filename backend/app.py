@@ -46,6 +46,7 @@ GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 APP_URL                 = os.environ.get("APP_URL", "https://qamra-production.up.railway.app")
 ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "qamra-admin-2026")
 OWNER_PHONE             = os.environ.get("OWNER_PHONE", "97470263297")
+OWNER_EMAIL             = os.environ.get("OWNER_EMAIL", "")
 GDRIVE_FOLDER_ID        = os.environ.get("GDRIVE_FOLDER_ID", "")
 
 MATCH_CONF  = int(os.environ.get("MATCH_CONF", "50"))  # InsightFace cosine similarity * 100
@@ -664,11 +665,17 @@ def _append_rating_to_excel(event_code, phone, rating, comment, ts):
             media_body=MediaIoBaseUpload(buf, mimetype=mime),
         ).execute()
     else:
-        svc.files().create(
+        new_file = svc.files().create(
             body={"name": _RATINGS_XLSX},
             media_body=MediaIoBaseUpload(buf, mimetype=mime),
             fields="id",
         ).execute()
+        if OWNER_EMAIL:
+            svc.permissions().create(
+                fileId=new_file["id"],
+                body={"type": "user", "role": "writer", "emailAddress": OWNER_EMAIL},
+                sendNotificationEmail=False,
+            ).execute()
 
     print(f"[RATING] Excel updated: {phone} {rating}/10 for {event_code}", flush=True)
 
