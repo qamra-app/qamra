@@ -588,19 +588,10 @@ def get_next_guest_number(event_code):
         pass
     return nxt
 
-def create_guest_folder(guest_num, file_ids, event_name, file_map=None):
-    svc = _drive(write=True)
-    folder = svc.files().create(body={
-        "name": f"صورك من {event_name} 🌙 — ضيف {guest_num}",
-        "mimeType": "application/vnd.google-apps.folder",
-    }, fields="id").execute()
-    folder_id = folder["id"]
-    svc.permissions().create(
-        fileId=folder_id,
-        body={"type": "anyone", "role": "reader"},
-    ).execute()
-
-    # Build all batch objects first
+def _add_shortcuts(svc, folder_id, file_ids, file_map=None):
+    """Add Drive shortcuts for file_ids into an existing folder. Batched, parallel."""
+    if not file_ids:
+        return
     batches = []
     for chunk_start in range(0, len(file_ids), 100):
         err_list = []
@@ -620,7 +611,6 @@ def create_guest_folder(guest_num, file_ids, event_name, file_map=None):
             ))
         batches.append((batch, err_list))
 
-    # Execute all batches in parallel (up to 5 workers)
     total_errors = []
     with ThreadPoolExecutor(max_workers=min(len(batches), 5)) as ex:
         futs = {ex.submit(b.execute): el for b, el in batches}
@@ -633,6 +623,21 @@ def create_guest_folder(guest_num, file_ids, event_name, file_map=None):
 
     if total_errors:
         print(f"[FOLDER] {len(total_errors)} shortcut errors", flush=True)
+
+
+def create_guest_folder(guest_num, file_ids, event_name, file_map=None):
+    svc = _drive(write=True)
+    folder = svc.files().create(body={
+        "name": f"صورك من {event_name} 🌙 — ضيف {guest_num}",
+        "mimeType": "application/vnd.google-apps.folder",
+    }, fields="id").execute()
+    folder_id = folder["id"]
+    svc.permissions().create(
+        fileId=folder_id,
+        body={"type": "anyone", "role": "reader"},
+    ).execute()
+
+    _add_shortcuts(svc, folder_id, file_ids, file_map)
 
     link = f"https://drive.google.com/drive/folders/{folder_id}"
     print(f"[FOLDER] Created: {link} ({len(file_ids)} shortcuts)", flush=True)
@@ -924,37 +929,71 @@ def match_api():
         })
 
     session_id = hashlib.md5(f"{time.time()}{phone}".encode()).hexdigest()[:16]
-    _folder_cache[session_id] = None
 
-    def _build_folder():
+    # Create folder + set permissions synchronously so we can return folder_url immediately.
+    # Shortcuts are added in the background — they appear in the folder within seconds.
+    folder_url = None
+    folder_svc = None
+    folder_id  = None
+    if file_ids:
         try:
-            guest_num = get_next_guest_number(event_code)
-            url       = create_guest_folder(guest_num, file_ids, event["name"], file_map)
-            _folder_cache[session_id] = url
+            guest_num  = get_next_guest_number(event_code)
+            folder_svc = _drive(write=True)
+            _f         = folder_svc.files().create(body={
+                "name": f"صورك من {event['name']} 🌙 — ضيف {guest_num}",
+                "mimeType": "application/vnd.google-apps.folder",
+            }, fields="id").execute()
+            folder_id  = _f["id"]
+            folder_svc.permissions().create(
+                fileId=folder_id,
+                body={"type": "anyone", "role": "reader"},
+            ).execute()
+            folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
+            print(f"[FOLDER] Shell created {folder_url}", flush=True)
+        except Exception as e:
+            print(f"[FOLDER] Shell create error (will retry in background): {e}", flush=True)
+
+    _folder_cache[session_id] = folder_url  # None = still building (shell failed)
+
+    def _build_shortcuts():
+        url = folder_url
+        try:
+            if url and folder_svc and folder_id:
+                # Shell succeeded — just add shortcuts
+                _add_shortcuts(folder_svc, folder_id, file_ids, file_map)
+            elif file_ids:
+                # Shell failed — full fallback create
+                guest_num2 = get_next_guest_number(event_code)
+                url = create_guest_folder(guest_num2, file_ids, event["name"], file_map)
+            _folder_cache[session_id] = url or ""
             # Persist to VPS KV so URL survives Railway restarts — retry up to 3x
-            saved = False
-            for _attempt in range(3):
-                try:
-                    r_kv = _session.put(
-                        f"{FACE_SERVICE_URL}/v1/kv/folder_{session_id}",
-                        json={"value": url},
-                        headers=_face_hdrs(), timeout=15,
-                    )
-                    if r_kv.status_code == 200:
-                        saved = True
-                        break
-                    print(f"[FOLDER] KV save attempt {_attempt+1} status={r_kv.status_code}", flush=True)
-                except Exception as kv_e:
-                    print(f"[FOLDER] KV save attempt {_attempt+1} error: {kv_e}", flush=True)
-                time.sleep(2)
-            print(f"[FOLDER] Done session={session_id} files={len(file_ids)} kv_saved={saved}", flush=True)
+            if url:
+                saved = False
+                for _attempt in range(3):
+                    try:
+                        r_kv = _session.put(
+                            f"{FACE_SERVICE_URL}/v1/kv/folder_{session_id}",
+                            json={"value": url},
+                            headers=_face_hdrs(), timeout=15,
+                        )
+                        if r_kv.status_code == 200:
+                            saved = True
+                            break
+                        print(f"[FOLDER] KV save attempt {_attempt+1} status={r_kv.status_code}", flush=True)
+                    except Exception as kv_e:
+                        print(f"[FOLDER] KV save attempt {_attempt+1} error: {kv_e}", flush=True)
+                    time.sleep(2)
+                print(f"[FOLDER] Done session={session_id} files={len(file_ids)} kv_saved={saved}", flush=True)
         except Exception as e:
             _folder_cache[session_id] = ""
             print(f"[FOLDER] Error session={session_id}: {e}", flush=True)
 
-    threading.Thread(target=_build_folder, daemon=True).start()
+    threading.Thread(target=_build_shortcuts, daemon=True).start()
 
-    return jsonify({"matches": results, "session_id": session_id}), 200
+    resp = {"matches": results, "session_id": session_id}
+    if folder_url:
+        resp["folder_url"] = folder_url
+    return jsonify(resp), 200
 
 @app.route("/index", methods=["POST"])
 def index_photos():

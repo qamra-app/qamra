@@ -26,10 +26,14 @@ const App = (() => {
   let sessionId   = "";
   let qr          = null;
   let driveQr     = null;
-  let folderPoll  = null;
-  let resetTimer  = null;
-  let countTimer  = null;
-  let history     = [];
+  let folderPoll       = null;
+  let resetTimer       = null;
+  let countTimer       = null;
+  let resultsTimer     = null;
+  let resultsCountTimer = null;
+  let history          = [];
+
+  const RESULTS_SEC = 180; // 3 minutes inactivity on results screen
 
   // ── Auto-capture state ─────────────────────────────────
   let _detectTimer  = null;
@@ -72,10 +76,12 @@ const App = (() => {
   function backToResults() {
     clearCountdown();
     show("screen-results");
+    startResultsCountdown();
   }
 
   function reset() {
     clearCountdown();
+    clearResultsCountdown();
     stopCamera();
     phone     = "";
     matches      = [];
@@ -196,6 +202,11 @@ const App = (() => {
     }
 
     video.srcObject = stream;
+    // Best-effort: tell camera to auto-expose continuously
+    try {
+      const track = stream.getVideoTracks()[0];
+      await track.applyConstraints({ advanced: [{ exposureMode: 'continuous' }] });
+    } catch (_) { /* unsupported on this device — ignore */ }
     // Chrome requires metadata loaded before play() — otherwise black screen
     await new Promise(resolve => {
       if (video.readyState >= 2) { resolve(); return; }
@@ -448,16 +459,18 @@ const App = (() => {
         } catch (_) {
           if (attempts > 50) { clearInterval(folderPoll); folderPoll = null; driveBar.style.display = "none"; }
         }
-      }, 3000);
+      }, 1000);
     } else {
       driveBar.style.display = "none";
     }
 
     push("screen-results");
+    startResultsCountdown();
   }
 
   // ── Photo Detail + QR ──────────────────────────────────
   function showPhoto(match) {
+    clearResultsCountdown();
     document.getElementById("full-photo").src = match.url;
 
     const dlBtn = document.getElementById("dl-btn");
@@ -513,6 +526,53 @@ const App = (() => {
     if (bar) { bar.style.transition = "none"; bar.style.width = "100%"; }
   }
 
+  // ── Results inactivity countdown ───────────────────────
+  function startResultsCountdown() {
+    clearResultsCountdown();
+    let remaining = RESULTS_SEC;
+    _updateResultsBar(remaining);
+
+    const bar = document.getElementById("results-bar");
+    if (bar) {
+      bar.style.transition = "none";
+      bar.style.width      = "100%";
+      requestAnimationFrame(() => {
+        bar.style.transition = `width ${RESULTS_SEC}s linear`;
+        bar.style.width      = "0%";
+      });
+    }
+
+    resultsCountTimer = setInterval(() => {
+      remaining--;
+      _updateResultsBar(remaining);
+      if (remaining <= 0) reset();
+    }, 1000);
+
+    resultsTimer = setTimeout(reset, RESULTS_SEC * 1000 + 200);
+  }
+
+  function clearResultsCountdown() {
+    clearInterval(resultsCountTimer);
+    clearTimeout(resultsTimer);
+    resultsCountTimer = resultsTimer = null;
+    const bar = document.getElementById("results-bar");
+    if (bar) { bar.style.transition = "none"; bar.style.width = "100%"; }
+  }
+
+  function _updateResultsBar(remaining) {
+    const el = document.getElementById("results-countdown");
+    if (!el) return;
+    const m = Math.floor(remaining / 60);
+    const s = remaining % 60;
+    el.textContent = `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function _resetResultsInactivity() {
+    if (document.getElementById("screen-results").classList.contains("active")) {
+      startResultsCountdown();
+    }
+  }
+
   // ── Guest Logging ──────────────────────────────────────
   async function logGuest() {
     try {
@@ -527,6 +587,10 @@ const App = (() => {
       });
     } catch (_) { /* non-critical */ }
   }
+
+  // Reset results inactivity timer on any interaction with the results screen
+  document.getElementById("screen-results")
+    .addEventListener("pointerdown", _resetResultsInactivity);
 
   // ── Public API ─────────────────────────────────────────
   return { start, goBack, backToResults, reset, digit, del, confirmPhone, skipPhone, snap, openCountryPicker, closeCountryPicker, retryCamera };

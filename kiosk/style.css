@@ -360,6 +360,7 @@ html, body {
   object-fit: cover;
   -webkit-transform: scaleX(-1);
   transform: scaleX(-1);
+  filter: brightness(1.15);
 }
 .face-oval {
   position: absolute;
@@ -370,7 +371,7 @@ html, body {
   border: 2px solid var(--gold);
   border-radius: 50%;
   pointer-events: none;
-  box-shadow: 0 0 0 9999px rgba(26,22,18,0.48);
+  box-shadow: 0 0 0 9999px rgba(26,22,18,0.30);
   transition: border-color 0.3s, box-shadow 0.3s;
 }
 .face-oval.locking {
