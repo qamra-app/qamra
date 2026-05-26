@@ -774,16 +774,14 @@ def search_and_send(selfie_bytes, sender, event_code):
         with ThreadPoolExecutor(max_workers=3) as ex:
             ex.map(lambda fid: send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}"), teaser_ids)
 
-        send_msg(sender, "⏳ جاري تجهيز مجلد صورك الخاص، لحظة واحدة... 🗂️")
+        send_msg(sender, "⏳ جاري تجهيز معرض صورك الخاص، لحظة واحدة... 🖼️")
 
-        guest_num   = get_next_guest_number(event_code)
-        print(f"[FOLDER] Creating for guest {guest_num}, {len(file_ids)} photos", flush=True)
-        folder_link  = create_guest_folder(guest_num, file_ids, event["name"], file_map)
-        short_link   = make_short_link(folder_link)
-        print(f"[FOLDER] Sending link to {sender}: {short_link}", flush=True)
+        gallery_token = create_gallery_token(event_code, file_ids)
+        gallery_link  = f"{APP_URL}/gallery/{event_code}/g/{gallery_token}"
+        print(f"[GALLERY] Sending link to {sender}: {gallery_link}", flush=True)
         send_msg(sender,
-            f"📂 جميع صورك في مجلدك الخاص:\n{short_link}\n\n"
-            "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
+            f"🖼️ معرض صورك الخاص جاهز:\n{gallery_link}\n\n"
+            "اضغط على أي صورة لحفظها بجودتها الأصلية، أو احفظ الكل دفعة واحدة 🌙"
         )
         print(f"[FOLDER] Link sent, waiting before rating", flush=True)
         time.sleep(2)
@@ -805,6 +803,351 @@ def make_short_link(folder_url: str) -> str:
     _short_links[code] = folder_url
     return f"{APP_URL}/f/{code}"
 
+# ── Gallery token store ───────────────────────────────────────────────────────
+import secrets, zipfile
+
+GALLERY_TTL = 7 * 24 * 3600  # 7 days
+
+def create_gallery_token(event_code: str, file_ids: list) -> str:
+    token = secrets.token_urlsafe(6)[:8]
+    payload = json.dumps({
+        "event_code": event_code,
+        "file_ids":   file_ids,
+        "created_at": int(time.time()),
+        "expires_at": int(time.time()) + GALLERY_TTL,
+    }, ensure_ascii=False)
+    try:
+        _session.put(
+            f"{FACE_SERVICE_URL}/v1/kv/gallery_{token}",
+            json={"value": payload},
+            headers=_face_hdrs(),
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[GALLERY] KV save error: {e}", flush=True)
+    return token
+
+def load_gallery_token(token: str):
+    try:
+        r = _session.get(
+            f"{FACE_SERVICE_URL}/v1/kv/gallery_{token}",
+            headers=_face_hdrs(), timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+        data = json.loads(r.json()["value"])
+        if time.time() > data.get("expires_at", 0):
+            return None
+        return data
+    except Exception as e:
+        print(f"[GALLERY] KV load error: {e}", flush=True)
+        return None
+
+# ── Gallery HTML template ─────────────────────────────────────────────────────
+def _gallery_html(event_name: str, token: str, event_code: str, file_ids: list, file_map: dict) -> str:
+    photos_js = json.dumps([
+        {"id": fid, "name": file_map.get(fid, {}).get("name", fid)}
+        for fid in file_ids
+    ], ensure_ascii=False)
+
+    zip_url = f"{APP_URL}/gallery/{event_code}/g/{token}/zip"
+
+    return f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>قمرة — صورك من {event_name}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#F2EDE3;
+  --bg-alt:#E8E1D2;
+  --paper:#FAF6EC;
+  --ink:#1A1612;
+  --ink-soft:#4A413A;
+  --ink-mute:rgba(26,22,18,0.50);
+  --ink-faint:rgba(26,22,18,0.18);
+  --rule:rgba(26,22,18,0.14);
+  --gold:#C9A96E;
+  --gold-soft:rgba(201,169,110,0.12);
+}}
+html,body{{min-height:100%;background:var(--bg);color:var(--ink);
+  font-family:'Inter Tight',-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;direction:rtl}}
+
+/* ── Header ── */
+.header{{
+  background:var(--paper);
+  border-bottom:1px solid var(--rule);
+  padding:28px 20px 22px;
+  text-align:center;
+}}
+.header-brand{{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--ink-mute);margin-bottom:10px;
+}}
+.header-event{{
+  font-family:'Instrument Serif',serif;
+  font-size:clamp(22px,6vw,34px);font-weight:400;font-style:italic;
+  color:var(--ink);margin-bottom:6px;line-height:1.2;
+}}
+.header-count{{
+  display:inline-flex;align-items:center;gap:8px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--gold);margin-top:4px;
+}}
+.header-count::before{{content:"";display:block;width:16px;height:1px;background:var(--gold);opacity:.6}}
+.header-count::after{{content:"";display:block;width:16px;height:1px;background:var(--gold);opacity:.6}}
+
+/* ── Action bar ── */
+.action-bar{{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;
+  background:var(--bg-alt);
+  border-bottom:1px solid var(--rule);
+  gap:12px;
+}}
+.action-hint{{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px;letter-spacing:.08em;color:var(--ink-mute);
+}}
+.btn-save-all{{
+  display:inline-flex;align-items:center;gap:10px;
+  background:var(--ink);color:var(--bg);
+  border:none;padding:11px 20px;
+  font-family:'Inter Tight',sans-serif;
+  font-size:13px;font-weight:500;letter-spacing:.02em;
+  cursor:pointer;text-decoration:none;
+  white-space:nowrap;transition:background .15s;
+  flex-shrink:0;
+}}
+.btn-save-all::after{{content:"";display:inline-block;width:12px;height:1px;background:currentColor;margin-right:4px}}
+.btn-save-all:active{{background:var(--ink-soft)}}
+.btn-save-all:disabled{{opacity:.45;cursor:not-allowed}}
+
+/* ── Zip status ── */
+.zip-bar{{
+  display:none;align-items:center;gap:12px;
+  padding:11px 16px;
+  background:var(--paper);border-bottom:1px solid var(--rule);
+}}
+.zip-bar.open{{display:flex}}
+.zip-spinner{{
+  width:16px;height:16px;flex-shrink:0;
+  border:2px solid var(--rule);border-top-color:var(--gold);
+  border-radius:50%;animation:spin .8s linear infinite;
+}}
+@keyframes spin{{to{{transform:rotate(360deg)}}}}
+.zip-text{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;color:var(--ink-mute);flex:1}}
+.btn-zip{{
+  display:none;align-items:center;gap:8px;
+  background:#2D6A3F;color:#FAF6EC;
+  border:none;padding:9px 16px;
+  font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:500;
+  cursor:pointer;text-decoration:none;white-space:nowrap;
+}}
+.btn-zip.ready{{display:inline-flex}}
+.btn-zip:active{{background:#235531}}
+
+/* ── Gallery grid ── */
+.gallery{{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
+  gap:3px;padding:3px;
+  background:var(--bg-alt);
+}}
+@media(max-width:480px){{.gallery{{grid-template-columns:repeat(2,1fr)}}}}
+
+.photo-card{{
+  position:relative;aspect-ratio:4/3;overflow:hidden;
+  background:var(--bg-alt);cursor:pointer;
+}}
+.photo-card img{{
+  width:100%;height:100%;object-fit:cover;display:block;
+  transition:transform .3s ease;
+}}
+.photo-card:active img{{transform:scale(1.04)}}
+.photo-card .skeleton{{
+  position:absolute;inset:0;
+  background:linear-gradient(90deg,var(--bg-alt) 25%,var(--rule) 50%,var(--bg-alt) 75%);
+  background-size:200% 100%;animation:shimmer 1.4s infinite;
+}}
+@keyframes shimmer{{0%{{background-position:200% 0}}100%{{background-position:-200% 0}}}}
+.photo-card .overlay{{
+  position:absolute;inset:0;
+  background:linear-gradient(to top,rgba(26,22,18,.68) 0%,transparent 48%);
+  opacity:0;transition:opacity .2s;
+  display:flex;align-items:flex-end;justify-content:space-between;
+  padding:10px;
+}}
+.photo-card:hover .overlay{{opacity:1}}
+@media(max-width:768px){{.photo-card .overlay{{opacity:1;background:linear-gradient(to top,rgba(26,22,18,.52) 0%,transparent 44%)}}}}
+.photo-name{{
+  font-family:'JetBrains Mono',monospace;font-size:10px;
+  letter-spacing:.04em;color:var(--paper);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;
+}}
+.btn-save{{
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--paper);color:var(--ink);
+  border:none;padding:6px 11px;
+  font-family:'Inter Tight',sans-serif;font-size:12px;font-weight:500;
+  cursor:pointer;text-decoration:none;white-space:nowrap;flex-shrink:0;
+}}
+.btn-save:active{{background:var(--bg-alt)}}
+
+/* ── Lightbox ── */
+.lightbox{{
+  display:none;position:fixed;inset:0;
+  background:rgba(26,22,18,.96);z-index:1000;
+  flex-direction:column;align-items:center;justify-content:center;
+  padding:16px;
+}}
+.lightbox.open{{display:flex}}
+.lightbox-img-wrap{{display:flex;align-items:center;justify-content:center;flex:1;width:100%}}
+.lightbox img{{max-width:95vw;max-height:75vh;object-fit:contain}}
+.lightbox-close{{
+  position:absolute;top:14px;right:14px;
+  background:rgba(250,246,236,.1);border:none;
+  color:var(--paper);width:38px;height:38px;border-radius:50%;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  font-size:18px;
+}}
+.lightbox-close:active{{background:rgba(250,246,236,.2)}}
+.lightbox-footer{{
+  display:flex;align-items:center;gap:14px;padding-top:16px;
+  flex-wrap:wrap;justify-content:center;
+}}
+.lb-name{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;color:rgba(250,246,236,.4)}}
+.btn-lb-save{{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--gold);color:var(--ink);
+  border:none;padding:11px 24px;
+  font-family:'Inter Tight',sans-serif;font-size:14px;font-weight:500;
+  cursor:pointer;text-decoration:none;
+}}
+.btn-lb-save:active{{background:#b8945a}}
+
+/* ── Footer ── */
+.footer{{
+  text-align:center;padding:28px 16px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-faint);border-top:1px solid var(--rule);
+  background:var(--paper);
+}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-brand">QAMRA</div>
+  <div class="header-event">{event_name}</div>
+  <div class="header-count">{len(file_ids)} صورة وجدناها لك</div>
+</div>
+
+<div class="action-bar">
+  <span class="action-hint">اضغط على أي صورة للمعاينة والحفظ</span>
+  <button class="btn-save-all" id="btn-all" onclick="saveAll()">
+    حفظ الكل
+  </button>
+</div>
+
+<div class="zip-bar" id="zip-bar">
+  <div class="zip-spinner" id="zip-spinner"></div>
+  <span class="zip-text" id="zip-text">جاري تجهيز الملف...</span>
+  <a class="btn-zip" id="btn-zip" href="{zip_url}" download="قمرة-صورك.zip">
+    ↓ حفظ ZIP
+  </a>
+</div>
+
+<div class="gallery" id="gallery"></div>
+
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" onclick="closeLb()">✕</button>
+  <div class="lightbox-img-wrap"><img id="lb-img" src="" alt=""></div>
+  <div class="lightbox-footer">
+    <span class="lb-name" id="lb-name"></span>
+    <a class="btn-lb-save" id="lb-save" href="#" target="_blank" rel="noopener">
+      ↓ حفظ الصورة الأصلية
+    </a>
+  </div>
+</div>
+
+<div class="footer">Powered by QAMRA · صورك بجودتها الأصلية</div>
+
+<script>
+const photos = {photos_js};
+const APP_URL = "{APP_URL}";
+
+function thumbUrl(id) {{
+  return APP_URL + '/photo/' + id;
+}}
+function dlUrl(id) {{
+  return 'https://drive.google.com/uc?export=download&id=' + id;
+}}
+
+const gallery = document.getElementById('gallery');
+photos.forEach((p, i) => {{
+  const card = document.createElement('div');
+  card.className = 'photo-card';
+  card.innerHTML = `
+    <div class="skeleton" id="sk${{i}}"></div>
+    <img src="${{thumbUrl(p.id)}}" alt="${{p.name}}" loading="lazy"
+         onload="var s=document.getElementById('sk${{i}}');if(s)s.remove()"
+         onerror="var s=document.getElementById('sk${{i}}');if(s)s.style.opacity='.2'">
+    <div class="overlay">
+      <span class="photo-name">${{p.name}}</span>
+      <a class="btn-save" href="${{dlUrl(p.id)}}" target="_blank" rel="noopener"
+         onclick="event.stopPropagation()">↓ حفظ</a>
+    </div>`;
+  card.addEventListener('click', () => openLb(i));
+  gallery.appendChild(card);
+}});
+
+function openLb(i) {{
+  const p = photos[i];
+  document.getElementById('lb-img').src = thumbUrl(p.id);
+  document.getElementById('lb-name').textContent = p.name;
+  const s = document.getElementById('lb-save');
+  s.href = dlUrl(p.id);
+  document.getElementById('lightbox').classList.add('open');
+}}
+function closeLb() {{
+  document.getElementById('lightbox').classList.remove('open');
+}}
+document.getElementById('lightbox').addEventListener('click', e => {{
+  if (e.target === document.getElementById('lightbox')) closeLb();
+}});
+document.addEventListener('keydown', e => {{ if (e.key==='Escape') closeLb(); }});
+
+function saveAll() {{
+  const btn = document.getElementById('btn-all');
+  const bar = document.getElementById('zip-bar');
+  const txt = document.getElementById('zip-text');
+  const spin = document.getElementById('zip-spinner');
+  const zipBtn = document.getElementById('btn-zip');
+  btn.disabled = true;
+  bar.classList.add('open');
+  txt.textContent = 'جاري تجهيز ' + photos.length + ' صورة...';
+  // The zip endpoint is server-side — just activate the download link
+  setTimeout(() => {{
+    spin.style.display = 'none';
+    txt.textContent = 'جاهز — اضغط لحفظ جميع صورك';
+    zipBtn.classList.add('ready');
+    btn.disabled = false;
+  }}, 800);
+}}
+</script>
+</body>
+</html>"""
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/f/<code>", methods=["GET"])
 def short_link_redirect(code):
@@ -813,6 +1156,78 @@ def short_link_redirect(code):
         return "رابط غير صالح", 404
     from flask import redirect
     return redirect(url, code=302)
+
+@app.route("/gallery/<event_code>/g/<token>", methods=["GET"])
+def gallery_view(event_code, token):
+    data = load_gallery_token(token)
+    if not data:
+        return """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>قمرة — رابط منتهي</title>
+<style>*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#F2EDE3;color:#1A1612;font-family:'Inter Tight',-apple-system,sans-serif;
+display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center}}
+.brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;
+color:rgba(26,22,18,.4);margin-bottom:32px}}
+h1{{font-family:'Instrument Serif',serif;font-size:32px;font-weight:400;font-style:italic;margin-bottom:12px}}
+p{{font-size:14px;color:rgba(26,22,18,.55);line-height:1.6}}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@1&family=JetBrains+Mono&display=swap" rel="stylesheet">
+</head><body>
+<div class="brand">QAMRA</div>
+<h1>انتهت صلاحية الرابط</h1>
+<p>هذا الرابط لم يعد صالحاً.<br>تواصل مع المصور للحصول على رابط جديد.</p>
+</body></html>""", 410, {"Content-Type": "text/html; charset=utf-8"}
+
+    state    = load_state(data["event_code"])
+    file_map = state.get("file_map", {})
+    event    = get_event(data["event_code"]) or {}
+    html     = _gallery_html(
+        event_name=event.get("name", data["event_code"]),
+        token=token,
+        event_code=data["event_code"],
+        file_ids=data["file_ids"],
+        file_map=file_map,
+    )
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/gallery/<event_code>/g/<token>/zip", methods=["GET"])
+def gallery_zip(event_code, token):
+    from flask import stream_with_context, Response
+    data = load_gallery_token(token)
+    if not data:
+        return "رابط غير صالح أو منتهي", 410
+
+    state    = load_state(data["event_code"])
+    file_map = state.get("file_map", {})
+    file_ids = data["file_ids"]
+
+    def generate():
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+            for fid in file_ids:
+                try:
+                    raw  = download_file(fid)
+                    name = file_map.get(fid, {}).get("name", f"{fid}.jpg")
+                    zf.writestr(name, raw)
+                except Exception as e:
+                    print(f"[ZIP] skip {fid}: {e}", flush=True)
+        buf.seek(0)
+        while True:
+            chunk = buf.read(65536)
+            if not chunk:
+                break
+            yield chunk
+
+    event = get_event(data["event_code"]) or {}
+    fname = f"قمرة-{event.get('name', event_code)}.zip".replace("/", "-")
+    return Response(
+        stream_with_context(generate()),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{requests.utils.quote(fname)}"},
+    )
+
 
 @app.route("/", methods=["GET"])
 def health():
@@ -990,7 +1405,10 @@ def match_api():
 
     threading.Thread(target=_build_shortcuts, daemon=True).start()
 
-    resp = {"matches": results, "session_id": session_id}
+    gallery_token = create_gallery_token(event_code, file_ids)
+    gallery_url   = f"{APP_URL}/gallery/{event_code}/g/{gallery_token}"
+
+    resp = {"matches": results, "session_id": session_id, "gallery_url": gallery_url}
     if folder_url:
         resp["folder_url"] = folder_url
     return jsonify(resp), 200

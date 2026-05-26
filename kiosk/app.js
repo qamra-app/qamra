@@ -348,8 +348,8 @@ const App = (() => {
       totalMatches = (data.matches || []).length;
       matches   = (data.matches || []).slice(0, 21);
       faceKey   = data.face_path || "";
-      folderUrl = data.folder_url || "";
-      sessionId = data.session_id || "";
+      folderUrl = data.gallery_url || data.folder_url || "";
+      sessionId = data.gallery_url ? "" : (data.session_id || "");
       await logGuest();
       renderResults();
     } catch (e) {
@@ -416,7 +416,7 @@ const App = (() => {
 
     function showDriveLoading() {
       driveBox.innerHTML = '<div class="drive-qr-skeleton"></div>';
-      driveTitle.textContent = "جاري تجهيز مجلدك...";
+      driveTitle.textContent = "جاري تجهيز معرضك...";
       driveSub.textContent   = "سيظهر رمز QR خلال ثوانٍ ✨";
       driveBar.style.display = "flex";
     }
@@ -432,8 +432,8 @@ const App = (() => {
         colorLight:   "#FAF6EC",
         correctLevel: QRCode.CorrectLevel.M,
       });
-      driveTitle.textContent = "امسح لتحميل كل صورك";
-      driveSub.textContent   = "Google Drive · كل الصور دفعة واحدة";
+      driveTitle.textContent = "امسح لفتح معرض صورك";
+      driveSub.textContent   = "قمرة · حفظ بجودة أصلية · صورك فقط";
       driveBar.classList.add("drive-bar-ready");
       driveBar.style.display = "flex";
     }
