@@ -434,7 +434,6 @@ const App = (() => {
       let attempts = 0;
       folderPoll = setInterval(async () => {
         attempts++;
-        if (attempts > 30) { clearInterval(folderPoll); folderPoll = null; return; }
         try {
           const r = await fetch(`/api/folder-status/${sessionId}`);
           const d = await r.json();
@@ -442,8 +441,13 @@ const App = (() => {
             clearInterval(folderPoll); folderPoll = null;
             folderUrl = d.folder_url;
             renderDriveQr(folderUrl);
+          } else if (d.status === "failed" || d.status === "not_found" || attempts > 30) {
+            clearInterval(folderPoll); folderPoll = null;
+            driveBar.style.display = "none";
           }
-        } catch (_) {}
+        } catch (_) {
+          if (attempts > 30) { clearInterval(folderPoll); folderPoll = null; driveBar.style.display = "none"; }
+        }
       }, 3000);
     } else {
       driveBar.style.display = "none";

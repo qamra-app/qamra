@@ -824,6 +824,8 @@ def folder_status(session_id):
     url = _folder_cache[session_id]
     if url is None:
         return jsonify({"status": "building"}), 202
+    if url == "":
+        return jsonify({"status": "failed"}), 200
     return jsonify({"status": "ready", "folder_url": url}), 200
 
 @app.route("/match", methods=["POST"])
