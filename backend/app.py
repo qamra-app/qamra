@@ -1212,6 +1212,28 @@ def admin_reset_index(code):
     threading.Thread(target=run_index, args=(code,), daemon=True).start()
     return jsonify({"status": "reset", "event": code, "indexing": "started"}), 200
 
+@app.route("/admin/test-folder", methods=["POST"])
+def admin_test_folder():
+    """Test Drive folder creation with a few real file IDs — helps diagnose failures."""
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    event_code = request.args.get("event", "DEFAULT").upper()
+    event = get_event(event_code)
+    if not event:
+        return jsonify({"error": f"No event {event_code}"}), 404
+    state    = load_state(event_code)
+    file_map = state.get("file_map", {})
+    file_ids = list(file_map.keys())[:5]
+    if not file_ids:
+        return jsonify({"error": "No indexed files yet"}), 503
+    try:
+        import traceback as _tb
+        guest_num = get_next_guest_number(event_code)
+        url = create_guest_folder(guest_num, file_ids, event["name"], file_map)
+        return jsonify({"status": "ok", "url": url, "files_used": len(file_ids)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e), "traceback": _tb.format_exc()}), 500
+
 @app.route("/admin/event/<code>", methods=["DELETE"])
 def admin_delete_event(code):
     if not _check_admin():
