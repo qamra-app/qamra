@@ -1302,12 +1302,9 @@ def _handle_whatsapp():
 
     # ── Selfie received — ACK instantly, download + search in background ─────
     if has_media:
+        # Treat any image as a selfie search — skip the menu entirely
         if state not in ("awaiting_selfie", "choosing_event"):
-            send_buttons(sender,
-                "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟",
-                ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]
-            )
-            return "", 200
+            _set_conv(sender, "awaiting_selfie")
 
         event_code = conv.get("event_code")
         if not event_code or not get_event(event_code):
