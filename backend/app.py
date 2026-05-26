@@ -558,10 +558,28 @@ def _keepalive_loop():
 threading.Thread(target=_keepalive_loop, daemon=True).start()
 
 # ── Guest folder creation ─────────────────────────────────────────────────────
-def create_guest_folder(sender_label, file_ids, event_name):
+def get_next_guest_number(event_code):
+    key = f"guest_counter_{event_code}"
+    try:
+        r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/{key}", headers=_face_hdrs(), timeout=5)
+        current = int(r.json().get("value", "0")) if r.status_code == 200 else 0
+    except Exception:
+        current = 0
+    nxt = current + 1
+    try:
+        _session.put(
+            f"{FACE_SERVICE_URL}/v1/kv/{key}",
+            json={"value": str(nxt)},
+            headers=_face_hdrs(), timeout=5,
+        )
+    except Exception:
+        pass
+    return nxt
+
+def create_guest_folder(guest_num, file_ids, event_name):
     svc = _drive(write=True)
     folder = svc.files().create(body={
-        "name": f"صورك من {event_name} 🌙 — {sender_label}",
+        "name": f"صورك من {event_name} 🌙 — ضيف {guest_num}",
         "mimeType": "application/vnd.google-apps.folder",
     }, fields="id").execute()
     folder_id = folder["id"]
@@ -666,7 +684,8 @@ def search_and_send(selfie_bytes, sender, event_code):
             send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}")
             time.sleep(0.5)
 
-        folder_link = create_guest_folder(phone_label, file_ids, event["name"])
+        guest_num   = get_next_guest_number(event_code)
+        folder_link = create_guest_folder(guest_num, file_ids, event["name"])
         send_msg(sender,
             f"📂 جميع صورك في مجلدك الخاص:\n{folder_link}\n\n"
             "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
@@ -778,16 +797,16 @@ def match_api():
     session_id = hashlib.md5(f"{time.time()}{phone}".encode()).hexdigest()[:16]
     _folder_cache[session_id] = None
 
-    def _build_folder(sid, fid_list, ph, evt):
+    def _build_folder(sid, fid_list, ph, evt, ecode):
         try:
-            label = ph.replace("+", "") if ph else sid[:8]
-            url   = create_guest_folder(label, fid_list, evt["name"])
+            guest_num = get_next_guest_number(ecode)
+            url       = create_guest_folder(guest_num, fid_list, evt["name"])
             _folder_cache[sid] = url
         except Exception as e:
             _folder_cache[sid] = ""
             print(f"[FOLDER] Error: {e}", flush=True)
 
-    threading.Thread(target=_build_folder, args=(session_id, file_ids, phone, event), daemon=True).start()
+    threading.Thread(target=_build_folder, args=(session_id, file_ids, phone, event, event_code), daemon=True).start()
 
     return jsonify({"matches": results, "session_id": session_id}), 200
 

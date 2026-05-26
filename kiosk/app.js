@@ -37,7 +37,7 @@ const App = (() => {
   let _detectCanvas = null;
   let _detectCtx    = null;
   const CAPTURE_MS  = 3000;  // hold still for 3 s
-  const MOTION_THR  = 8;     // avg per-channel pixel diff = "still"
+  const MOTION_THR  = 30;    // avg per-channel pixel diff = "still"
 
   // ── Screens ────────────────────────────────────────────
   function show(id) {
