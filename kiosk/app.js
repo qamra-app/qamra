@@ -19,6 +19,7 @@ const App = (() => {
   let phone       = "";
   let stream      = null;
   let matches     = [];
+  let totalMatches = 0;
   let faceKey     = "";
   let folderUrl   = "";
   let sessionId   = "";
@@ -65,8 +66,9 @@ const App = (() => {
     clearCountdown();
     stopCamera();
     phone     = "";
-    matches   = [];
-    faceKey   = "";
+    matches      = [];
+    totalMatches = 0;
+    faceKey      = "";
     folderUrl = "";
     sessionId = "";
     history   = [];
@@ -214,6 +216,7 @@ const App = (() => {
       const data = await res.json();
       if (!res.ok) {
         // 503 = not indexed yet, 404 = no event — show empty results instead of crashing
+        totalMatches = 0;
         matches   = [];
         faceKey   = data.face_path || "";
         folderUrl = "";
@@ -221,6 +224,7 @@ const App = (() => {
         renderResults();
         return;
       }
+      totalMatches = (data.matches || []).length;
       matches   = (data.matches || []).slice(0, 21);
       faceKey   = data.face_path || "";
       folderUrl = data.folder_url || "";
@@ -250,7 +254,9 @@ const App = (() => {
           <small>تأكد أن السيلفي واضح وحاول مرة ثانية</small>
         </div>`;
     } else {
-      label.textContent = `وجدنا ${matches.length} صورة`;
+      label.textContent = totalMatches > 21
+        ? `وجدنا أكثر من 21 صورة — امسح الـ QR للحصول على كل صورك`
+        : `وجدنا ${matches.length} صورة`;
       matches.forEach((m, i) => {
         const card = document.createElement("div");
         card.className = "photo-card";
