@@ -162,10 +162,7 @@ def _find_user_for_owner(owner_phone):
 
 # ── Face service auth header ──────────────────────────────────────────────────
 def _event_btn_label(name: str) -> str:
-    """Return a short button label (≤20 chars) from a full event name."""
-    parts = name.strip().split()
-    two = " ".join(parts[-2:])
-    return (two if len(two) <= 20 else parts[-1])[:20]
+    return name
 
 def _face_hdrs():
     return {"X-API-Key": FACE_SERVICE_KEY}
