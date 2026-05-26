@@ -842,14 +842,28 @@ def serve_photo(file_id):
 
 @app.route("/folder-status/<session_id>", methods=["GET"])
 def folder_status(session_id):
-    if session_id not in _folder_cache:
-        return jsonify({"status": "not_found"}), 404
-    url = _folder_cache[session_id]
-    if url is None:
-        return jsonify({"status": "building"}), 202
-    if url == "":
-        return jsonify({"status": "failed"}), 200
-    return jsonify({"status": "ready", "folder_url": url}), 200
+    # Check in-memory cache first (fast path)
+    if session_id in _folder_cache:
+        url = _folder_cache[session_id]
+        if url is None:
+            return jsonify({"status": "building"}), 202
+        if url == "":
+            return jsonify({"status": "failed"}), 200
+        return jsonify({"status": "ready", "folder_url": url}), 200
+    # Not in memory — Railway may have restarted; check VPS KV
+    try:
+        r = _session.get(
+            f"{FACE_SERVICE_URL}/v1/kv/folder_{session_id}",
+            headers=_face_hdrs(), timeout=5,
+        )
+        if r.status_code == 200:
+            url = r.json().get("value", "")
+            if url:
+                _folder_cache[session_id] = url  # warm local cache
+                return jsonify({"status": "ready", "folder_url": url}), 200
+    except Exception:
+        pass
+    return jsonify({"status": "not_found"}), 404
 
 @app.route("/match", methods=["POST"])
 def match_api():
@@ -916,6 +930,15 @@ def match_api():
             guest_num = get_next_guest_number(event_code)
             url       = create_guest_folder(guest_num, file_ids, event["name"], file_map)
             _folder_cache[session_id] = url
+            # Persist to VPS KV so URL survives Railway restarts
+            try:
+                _session.put(
+                    f"{FACE_SERVICE_URL}/v1/kv/folder_{session_id}",
+                    json={"value": url},
+                    headers=_face_hdrs(), timeout=5,
+                )
+            except Exception:
+                pass
             print(f"[FOLDER] Done session={session_id} files={len(file_ids)}", flush=True)
         except Exception as e:
             _folder_cache[session_id] = ""
