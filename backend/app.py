@@ -600,13 +600,13 @@ def create_guest_folder(guest_num, file_ids, event_name, file_map=None):
         body={"type": "anyone", "role": "reader"},
     ).execute()
 
-    errors = []
-    def _batch_cb(request_id, response, exception):
-        if exception:
-            errors.append(str(exception))
-
+    # Build all batch objects first
+    batches = []
     for chunk_start in range(0, len(file_ids), 100):
-        batch = svc.new_batch_http_request(callback=_batch_cb)
+        err_list = []
+        def _cb(req_id, resp, exc, _el=err_list):
+            if exc: _el.append(str(exc))
+        batch = svc.new_batch_http_request(callback=_cb)
         for fid in file_ids[chunk_start:chunk_start + 100]:
             fname = (file_map or {}).get(fid, {}).get("name", fid)
             batch.add(svc.files().create(
@@ -618,10 +618,21 @@ def create_guest_folder(guest_num, file_ids, event_name, file_map=None):
                 },
                 fields="id"
             ))
-        batch.execute()
+        batches.append((batch, err_list))
 
-    if errors:
-        print(f"[FOLDER] {len(errors)} shortcut errors", flush=True)
+    # Execute all batches in parallel (up to 5 workers)
+    total_errors = []
+    with ThreadPoolExecutor(max_workers=min(len(batches), 5)) as ex:
+        futs = {ex.submit(b.execute): el for b, el in batches}
+        for fut in as_completed(futs):
+            try:
+                fut.result()
+            except Exception as e:
+                total_errors.append(str(e))
+            total_errors.extend(futs[fut])
+
+    if total_errors:
+        print(f"[FOLDER] {len(total_errors)} shortcut errors", flush=True)
 
     link = f"https://drive.google.com/drive/folders/{folder_id}"
     print(f"[FOLDER] Created: {link} ({len(file_ids)} shortcuts)", flush=True)
