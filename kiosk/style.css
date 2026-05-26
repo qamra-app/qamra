@@ -457,11 +457,14 @@ html, body {
   position: relative;
   background: var(--bg-alt);
   transition: opacity 0.15s;
+  aspect-ratio: 1;
+  overflow: hidden;
 }
 .photo-card:active { opacity: 0.82; }
 .photo-card img {
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
 .conf-pill {
