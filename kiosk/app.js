@@ -142,8 +142,9 @@ const App = (() => {
 
   async function confirmPhone() {
     if (phone.length < country.digits) return;
+    push("screen-selfie");                               // show screen first — Chrome needs visible element
+    await new Promise(r => requestAnimationFrame(r));   // let browser render before touching camera
     await openCamera();
-    push("screen-selfie");
   }
 
   // ── Camera ─────────────────────────────────────────────
@@ -172,6 +173,11 @@ const App = (() => {
     }
 
     video.srcObject = stream;
+    // Chrome requires metadata loaded before play() — otherwise black screen
+    await new Promise(resolve => {
+      if (video.readyState >= 2) { resolve(); return; }
+      video.onloadedmetadata = resolve;
+    });
     try {
       await video.play();
     } catch (e) {
@@ -205,8 +211,16 @@ const App = (() => {
       const form = new FormData();
       form.append("photo", blob, "selfie.jpg");
       const res  = await fetch("/api/match", { method: "POST", body: form });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (!res.ok) {
+        // 503 = not indexed yet, 404 = no event — show empty results instead of crashing
+        matches   = [];
+        faceKey   = data.face_path || "";
+        folderUrl = "";
+        sessionId = "";
+        renderResults();
+        return;
+      }
       matches   = (data.matches || []).slice(0, 21);
       faceKey   = data.face_path || "";
       folderUrl = data.folder_url || "";
