@@ -1,0 +1,20 @@
+[build]
+  publish = "kiosk"
+
+[[redirects]]
+  from   = "/api/match"
+  to     = "https://qamra-production.up.railway.app/match"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/folder-status/*"
+  to     = "https://qamra-production.up.railway.app/folder-status/:splat"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/log-guest"
+  to     = "https://qamra-production.up.railway.app/log-guest"
+  status = 200
+  force  = true

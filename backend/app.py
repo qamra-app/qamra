@@ -577,7 +577,7 @@ def get_next_guest_number(event_code):
         pass
     return nxt
 
-def create_guest_folder(guest_num, file_ids, event_name):
+def create_guest_folder(guest_num, file_ids, event_name, file_map=None):
     svc = _drive(write=True)
     folder = svc.files().create(body={
         "name": f"صورك من {event_name} 🌙 — ضيف {guest_num}",
@@ -597,9 +597,10 @@ def create_guest_folder(guest_num, file_ids, event_name):
     for chunk_start in range(0, len(file_ids), 100):
         batch = svc.new_batch_http_request(callback=_batch_cb)
         for fid in file_ids[chunk_start:chunk_start + 100]:
+            fname = (file_map or {}).get(fid, {}).get("name", fid)
             batch.add(svc.files().create(
                 body={
-                    "name": fid,
+                    "name": fname,
                     "mimeType": "application/vnd.google-apps.shortcut",
                     "shortcutDetails": {"targetId": fid},
                     "parents": [folder_id],
@@ -747,7 +748,7 @@ def search_and_send(selfie_bytes, sender, event_code):
             time.sleep(0.5)
 
         guest_num   = get_next_guest_number(event_code)
-        folder_link = create_guest_folder(guest_num, file_ids, event["name"])
+        folder_link = create_guest_folder(guest_num, file_ids, event["name"], file_map)
         send_msg(sender,
             f"📂 جميع صورك في مجلدك الخاص:\n{folder_link}\n\n"
             "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
@@ -859,16 +860,16 @@ def match_api():
     session_id = hashlib.md5(f"{time.time()}{phone}".encode()).hexdigest()[:16]
     _folder_cache[session_id] = None
 
-    def _build_folder(sid, fid_list, ph, evt, ecode):
+    def _build_folder(sid, fid_list, ph, evt, ecode, fmap):
         try:
             guest_num = get_next_guest_number(ecode)
-            url       = create_guest_folder(guest_num, fid_list, evt["name"])
+            url       = create_guest_folder(guest_num, fid_list, evt["name"], fmap)
             _folder_cache[sid] = url
         except Exception as e:
             _folder_cache[sid] = ""
             print(f"[FOLDER] Error: {e}", flush=True)
 
-    threading.Thread(target=_build_folder, args=(session_id, file_ids, phone, event, event_code), daemon=True).start()
+    threading.Thread(target=_build_folder, args=(session_id, file_ids, phone, event, event_code, file_map), daemon=True).start()
 
     return jsonify({"matches": results, "session_id": session_id}), 200
 
