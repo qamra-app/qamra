@@ -748,9 +748,10 @@ def search_and_send(selfie_bytes, sender, event_code):
             time.sleep(0.5)
 
         guest_num   = get_next_guest_number(event_code)
-        folder_link = create_guest_folder(guest_num, file_ids, event["name"], file_map)
+        folder_link  = create_guest_folder(guest_num, file_ids, event["name"], file_map)
+        short_link   = make_short_link(folder_link)
         send_msg(sender,
-            f"📂 جميع صورك في مجلدك الخاص:\n{folder_link}\n\n"
+            f"📂 جميع صورك في مجلدك الخاص:\n{short_link}\n\n"
             "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
         )
         time.sleep(2)
@@ -763,7 +764,23 @@ def search_and_send(selfie_bytes, sender, event_code):
         print(f"[REPLY] ERROR folder: {e}", flush=True)
         send_msg(sender, f"✅ وجدت *{count}* صورة لك من *{event['name']}* 🎉 — تواصل مع المصور لاستلامها.")
 
+# ── Short link redirect store ─────────────────────────────────────────────────
+_short_links: dict = {}  # code -> drive_folder_url
+
+def make_short_link(folder_url: str) -> str:
+    code = hashlib.md5(folder_url.encode()).hexdigest()[:8]
+    _short_links[code] = folder_url
+    return f"{APP_URL}/f/{code}"
+
 # ── Routes ────────────────────────────────────────────────────────────────────
+@app.route("/f/<code>", methods=["GET"])
+def short_link_redirect(code):
+    url = _short_links.get(code)
+    if not url:
+        return "رابط غير صالح", 404
+    from flask import redirect
+    return redirect(url, code=302)
+
 @app.route("/", methods=["GET"])
 def health():
     summary = {code: len(load_state(code).get("indexed_ids", [])) for code in _events}
