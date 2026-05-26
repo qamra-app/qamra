@@ -1116,7 +1116,10 @@ def admin_drive_folders():
             q="mimeType='application/vnd.google-apps.folder' and trashed=false",
             fields="files(id, name)",
             orderBy="name",
-            pageSize=100,
+            pageSize=200,
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+            corpora="allDrives",
         ).execute()
         folders = [{"id": f["id"], "name": f["name"]} for f in resp.get("files", [])]
         return jsonify(folders), 200
