@@ -846,7 +846,7 @@ def load_gallery_token(token: str):
 # ── Gallery HTML template ─────────────────────────────────────────────────────
 def _gallery_html(event_name: str, token: str, event_code: str, file_ids: list, file_map: dict) -> str:
     photos_js = json.dumps([
-        {"id": fid, "name": file_map.get(fid, {}).get("name", fid)}
+        {"id": fid}
         for fid in file_ids
     ], ensure_ascii=False)
 
@@ -988,11 +988,6 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 }}
 .photo-card:hover .overlay{{opacity:1}}
 @media(max-width:768px){{.photo-card .overlay{{opacity:1;background:linear-gradient(to top,rgba(26,22,18,.52) 0%,transparent 44%)}}}}
-.photo-name{{
-  font-family:'JetBrains Mono',monospace;font-size:10px;
-  letter-spacing:.04em;color:var(--paper);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;
-}}
 .btn-save{{
   display:inline-flex;align-items:center;gap:5px;
   background:var(--paper);color:var(--ink);
@@ -1073,7 +1068,6 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   <button class="lightbox-close" onclick="closeLb()">✕</button>
   <div class="lightbox-img-wrap"><img id="lb-img" src="" alt=""></div>
   <div class="lightbox-footer">
-    <span class="lb-name" id="lb-name"></span>
     <a class="btn-lb-save" id="lb-save" href="#" target="_blank" rel="noopener">
       ↓ حفظ الصورة الأصلية
     </a>
@@ -1099,11 +1093,10 @@ photos.forEach((p, i) => {{
   card.className = 'photo-card';
   card.innerHTML = `
     <div class="skeleton" id="sk${{i}}"></div>
-    <img src="${{thumbUrl(p.id)}}" alt="${{p.name}}" loading="lazy"
+    <img src="${{thumbUrl(p.id)}}" alt="" loading="lazy"
          onload="var s=document.getElementById('sk${{i}}');if(s)s.remove()"
          onerror="var s=document.getElementById('sk${{i}}');if(s)s.style.opacity='.2'">
     <div class="overlay">
-      <span class="photo-name">${{p.name}}</span>
       <a class="btn-save" href="${{dlUrl(p.id)}}" target="_blank" rel="noopener"
          onclick="event.stopPropagation()">↓ حفظ</a>
     </div>`;
@@ -1114,7 +1107,6 @@ photos.forEach((p, i) => {{
 function openLb(i) {{
   const p = photos[i];
   document.getElementById('lb-img').src = thumbUrl(p.id);
-  document.getElementById('lb-name').textContent = p.name;
   const s = document.getElementById('lb-save');
   s.href = dlUrl(p.id);
   document.getElementById('lightbox').classList.add('open');
@@ -1227,6 +1219,273 @@ def gallery_zip(event_code, token):
         mimetype="application/zip",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{requests.utils.quote(fname)}"},
     )
+
+
+@app.route("/gallery/<event_code>/all", methods=["GET"])
+def gallery_all(event_code):
+    event = get_event(event_code.upper())
+    if not event:
+        return "حفل غير موجود", 404
+    state    = load_state(event_code.upper())
+    file_map = state.get("file_map", {})
+    all_ids  = list(file_map.keys())
+    total    = len(all_ids)
+    page     = int(request.args.get("page", 0))
+    per_page = 50
+    page_ids = all_ids[page * per_page:(page + 1) * per_page]
+    has_more = (page + 1) * per_page < total
+
+    photos_js  = json.dumps([{"id": fid} for fid in page_ids], ensure_ascii=False)
+    all_ids_js = json.dumps(all_ids, ensure_ascii=False)
+    wa_number  = OWNER_PHONE
+    wa_link    = f"https://wa.me/{wa_number}"
+
+    html = f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>قمرة — كل صور {event['name']}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#F2EDE3;--bg-alt:#E8E1D2;--paper:#FAF6EC;
+  --ink:#1A1612;--ink-soft:#4A413A;--ink-mute:rgba(26,22,18,.50);
+  --ink-faint:rgba(26,22,18,.18);--rule:rgba(26,22,18,.14);
+  --gold:#C9A96E;
+}}
+html,body{{min-height:100%;background:var(--bg);color:var(--ink);
+  font-family:'Inter Tight',-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;direction:rtl}}
+.header{{background:var(--paper);border-bottom:1px solid var(--rule);padding:28px 20px 22px;text-align:center}}
+.header-brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:10px}}
+.header-event{{font-family:'Instrument Serif',serif;font-size:clamp(22px,6vw,34px);font-weight:400;font-style:italic;color:var(--ink);margin-bottom:6px}}
+.header-count{{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-top:4px}}
+.header-count::before,.header-count::after{{content:"";display:block;width:16px;height:1px;background:var(--gold);opacity:.6}}
+.wa-bar{{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--bg-alt);border-bottom:1px solid var(--rule);gap:12px;flex-wrap:wrap}}
+.wa-hint{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;color:var(--ink-mute)}}
+.btn-wa{{display:inline-flex;align-items:center;gap:8px;background:var(--ink);color:var(--bg);border:none;padding:10px 18px;font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;flex-shrink:0}}
+.btn-wa::after{{content:"";display:inline-block;width:10px;height:1px;background:currentColor;margin-right:2px}}
+.gallery{{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:3px;padding:3px;background:var(--bg-alt)}}
+@media(max-width:480px){{.gallery{{grid-template-columns:repeat(2,1fr)}}}}
+.photo-card{{position:relative;aspect-ratio:4/3;overflow:hidden;background:var(--bg-alt);cursor:pointer}}
+.photo-card img{{width:100%;height:100%;object-fit:cover;display:block;transition:transform .3s}}
+.photo-card:active img{{transform:scale(1.04)}}
+.skeleton{{position:absolute;inset:0;background:linear-gradient(90deg,var(--bg-alt) 25%,var(--rule) 50%,var(--bg-alt) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite}}
+@keyframes shimmer{{0%{{background-position:200% 0}}100%{{background-position:-200% 0}}}}
+.overlay{{position:absolute;inset:0;background:linear-gradient(to top,rgba(26,22,18,.68) 0%,transparent 48%);opacity:0;transition:opacity .2s;display:flex;align-items:flex-end;justify-content:flex-end;padding:10px}}
+.photo-card:hover .overlay{{opacity:1}}
+@media(max-width:768px){{.overlay{{opacity:1;background:linear-gradient(to top,rgba(26,22,18,.52) 0%,transparent 44%)}}}}
+.btn-save{{display:inline-flex;align-items:center;gap:5px;background:var(--paper);color:var(--ink);border:none;padding:6px 11px;font-family:'Inter Tight',sans-serif;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}}
+.load-more-wrap{{text-align:center;padding:32px 16px;background:var(--bg)}}
+.btn-load-more{{display:inline-flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);border:none;padding:14px 32px;font-family:'Inter Tight',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s;letter-spacing:.02em}}
+.btn-load-more::after{{content:"";display:block;width:14px;height:1px;background:currentColor}}
+.btn-load-more:active{{background:var(--ink-soft)}}
+.btn-load-more:disabled{{opacity:.4;cursor:not-allowed}}
+.lightbox{{display:none;position:fixed;inset:0;background:rgba(26,22,18,.96);z-index:1000;flex-direction:column;align-items:center;justify-content:center;padding:16px}}
+.lightbox.open{{display:flex}}
+.lightbox-img-wrap{{display:flex;align-items:center;justify-content:center;flex:1;width:100%}}
+.lightbox img{{max-width:95vw;max-height:75vh;object-fit:contain}}
+.lightbox-close{{position:absolute;top:14px;right:14px;background:rgba(250,246,236,.1);border:none;color:var(--paper);width:38px;height:38px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px}}
+.lightbox-footer{{display:flex;align-items:center;gap:14px;padding-top:16px}}
+.btn-lb-save{{display:inline-flex;align-items:center;gap:8px;background:var(--gold);color:var(--ink);border:none;padding:11px 24px;font-family:'Inter Tight',sans-serif;font-size:14px;font-weight:500;cursor:pointer;text-decoration:none}}
+.footer{{text-align:center;padding:28px 16px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);border-top:1px solid var(--rule);background:var(--paper)}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-brand">QAMRA</div>
+  <div class="header-event">{event['name']}</div>
+  <div class="header-count" id="count-label">{total} صورة</div>
+</div>
+<div class="wa-bar">
+  <span class="wa-hint">ابحث عن صورك الخاصة عبر واتساب</span>
+  <a href="{wa_link}" target="_blank" class="btn-wa">ابحث عن صورتي</a>
+</div>
+<div class="gallery" id="gallery"></div>
+{'<div class="load-more-wrap"><button class="btn-load-more" id="btn-more" onclick="loadMore()">تحميل المزيد</button></div>' if has_more else ''}
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" onclick="closeLb()">✕</button>
+  <div class="lightbox-img-wrap"><img id="lb-img" src="" alt=""></div>
+  <div class="lightbox-footer">
+    <a class="btn-lb-save" id="lb-save" href="#" target="_blank" rel="noopener">↓ حفظ الصورة الأصلية</a>
+  </div>
+</div>
+<div class="footer">Powered by QAMRA · صورك بجودتها الأصلية</div>
+<script>
+const APP_URL = "{APP_URL}";
+const EVENT_CODE = "{event_code.upper()}";
+const PER_PAGE = {per_page};
+let currentPage = {page};
+let allIds = {all_ids_js};
+let loadedIds = {photos_js}.map(p => p.id);
+
+function thumbUrl(id) {{ return APP_URL + '/photo/' + id; }}
+function dlUrl(id) {{ return 'https://drive.google.com/uc?export=download&id=' + id; }}
+
+const gallery = document.getElementById('gallery');
+
+function addPhotos(ids) {{
+  ids.forEach((id, i) => {{
+    const idx = gallery.children.length;
+    const card = document.createElement('div');
+    card.className = 'photo-card';
+    card.innerHTML = `
+      <div class="skeleton" id="sk${{idx}}"></div>
+      <img src="${{thumbUrl(id)}}" alt="" loading="lazy"
+           onload="var s=document.getElementById('sk${{idx}}');if(s)s.remove()"
+           onerror="var s=document.getElementById('sk${{idx}}');if(s)s.style.opacity='.2'">
+      <div class="overlay">
+        <a class="btn-save" href="${{dlUrl(id)}}" target="_blank" rel="noopener"
+           onclick="event.stopPropagation()">↓ حفظ</a>
+      </div>`;
+    card.addEventListener('click', () => openLb(id));
+    gallery.appendChild(card);
+  }});
+}}
+
+function openLb(id) {{
+  document.getElementById('lb-img').src = thumbUrl(id);
+  document.getElementById('lb-save').href = dlUrl(id);
+  document.getElementById('lightbox').classList.add('open');
+}}
+function closeLb() {{ document.getElementById('lightbox').classList.remove('open'); }}
+document.getElementById('lightbox').addEventListener('click', e => {{
+  if (e.target === document.getElementById('lightbox')) closeLb();
+}});
+document.addEventListener('keydown', e => {{ if (e.key==='Escape') closeLb(); }});
+
+async function loadMore() {{
+  const btn = document.getElementById('btn-more');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'جاري التحميل...';
+  currentPage++;
+  const start = currentPage * PER_PAGE;
+  const slice = allIds.slice(start, start + PER_PAGE);
+  addPhotos(slice);
+  if ((currentPage + 1) * PER_PAGE >= allIds.length) {{
+    btn.parentElement.remove();
+  }} else {{
+    btn.disabled = false;
+    btn.textContent = 'تحميل المزيد';
+  }}
+}}
+
+addPhotos(loadedIds);
+</script>
+</body></html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/event/<code>/landing", methods=["GET"])
+def event_landing_page(code):
+    event = get_event(code.upper())
+    if not event:
+        return "حفل غير موجود", 404
+
+    gallery_url = f"{APP_URL}/gallery/{code.upper()}/all"
+    wa_link     = f"https://wa.me/{OWNER_PHONE}"
+    landing_url = f"{APP_URL}/event/{code.upper()}/landing"
+
+    html = f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>قمرة — {event['name']}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#F2EDE3;--bg-alt:#E8E1D2;--paper:#FAF6EC;
+  --ink:#1A1612;--ink-soft:#4A413A;--ink-mute:rgba(26,22,18,.50);
+  --ink-faint:rgba(26,22,18,.18);--rule:rgba(26,22,18,.14);
+  --gold:#C9A96E;--gold-soft:rgba(201,169,110,.12);
+}}
+html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
+  font-family:'Inter Tight',-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;direction:rtl;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:32px 20px;}}
+.wrap{{width:100%;max-width:420px;display:flex;flex-direction:column;align-items:center;gap:0}}
+.brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:16px}}
+.event-name{{font-family:'Instrument Serif',serif;font-size:clamp(26px,7vw,42px);font-weight:400;font-style:italic;color:var(--ink);text-align:center;margin-bottom:6px;line-height:1.2}}
+.rule{{width:40px;height:1px;background:var(--gold);margin:20px auto 28px}}
+.cards{{width:100%;display:flex;flex-direction:column;gap:3px;margin-bottom:32px}}
+.card{{
+  display:flex;align-items:center;gap:20px;
+  background:var(--paper);border:1px solid var(--rule);
+  padding:22px 20px;text-decoration:none;color:var(--ink);
+  transition:background .15s;
+}}
+.card:active{{background:var(--bg-alt)}}
+.card.gold{{background:var(--gold-soft);border-color:rgba(201,169,110,.35)}}
+.card-icon{{font-size:28px;flex-shrink:0;line-height:1}}
+.card-body{{flex:1}}
+.card-title{{font-size:16px;font-weight:600;margin-bottom:3px}}
+.card-sub{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;color:var(--ink-mute)}}
+.card-arrow{{font-size:18px;color:var(--ink-mute);flex-shrink:0}}
+.qr-section{{
+  background:var(--paper);border:1px solid var(--rule);
+  padding:24px 20px;width:100%;text-align:center;
+}}
+.qr-label{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:16px}}
+#qr-box{{display:inline-block}}
+#qr-box canvas,#qr-box img{{width:180px!important;height:180px!important}}
+.qr-hint{{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.08em;color:var(--ink-faint);margin-top:12px}}
+.footer{{margin-top:28px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">QAMRA</div>
+  <div class="event-name">{event['name']}</div>
+  <div class="rule"></div>
+
+  <div class="cards">
+    <a href="{gallery_url}" class="card gold">
+      <span class="card-icon">🖼️</span>
+      <div class="card-body">
+        <div class="card-title">تصفح كل الصور</div>
+        <div class="card-sub">معرض الحفل كاملاً · جودة أصلية</div>
+      </div>
+      <span class="card-arrow">←</span>
+    </a>
+    <a href="{wa_link}" target="_blank" class="card">
+      <span class="card-icon">📸</span>
+      <div class="card-body">
+        <div class="card-title">ابحث عن صورتك</div>
+        <div class="card-sub">أرسل سيلفي عبر واتساب · ثوانٍ فقط</div>
+      </div>
+      <span class="card-arrow">←</span>
+    </a>
+  </div>
+
+  <div class="qr-section">
+    <div class="qr-label">شارك هذه الصفحة</div>
+    <div id="qr-box"></div>
+    <div class="qr-hint">امسح الرمز لفتح هذه الصفحة</div>
+  </div>
+
+  <div class="footer">Powered by QAMRA</div>
+</div>
+<script>
+new QRCode(document.getElementById('qr-box'), {{
+  text: "{landing_url}",
+  width: 180, height: 180,
+  colorDark: "#1A1612", colorLight: "#FAF6EC",
+  correctLevel: QRCode.CorrectLevel.M,
+}});
+</script>
+</body></html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 @app.route("/", methods=["GET"])
@@ -1444,13 +1703,18 @@ button{width:100%;background:#C9A96E;border:none;border-radius:10px;padding:14px
     for code, ev in _events.items():
         state   = load_state(code)
         count   = len(state.get("indexed_ids", []))
-        landing = f"{APP_URL}/event/{code}"
+        landing_url = f"{APP_URL}/event/{code}/landing"
+        gallery_url = f"{APP_URL}/gallery/{code}/all"
         events_rows += f"""
         <tr>
           <td><strong>{code}</strong></td>
           <td>{ev['name']}</td>
           <td>{count} صورة</td>
-          <td><a href="{landing}" target="_blank" style="color:#C9A96E">صفحة الحفل ↗</a></td>
+          <td>
+            <a href="{landing_url}" target="_blank" style="color:#C9A96E">صفحة الطاولات ↗</a>
+            &nbsp;·&nbsp;
+            <a href="{gallery_url}" target="_blank" style="color:#aaa;font-size:12px">كل الصور ↗</a>
+          </td>
           <td>
             <a href="/index?event={code}" onclick="fetch('/index?event={code}',{{method:'POST'}});this.textContent='⏳';return false"
                style="color:#aaa;font-size:13px">إعادة فهرسة</a>
