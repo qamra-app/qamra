@@ -252,6 +252,7 @@ if not _events and _DEFAULT_GDRIVE:
         "date":             "",
     }
     print("[EVENTS] Auto-registered DEFAULT event from env vars", flush=True)
+    threading.Thread(target=_save_events_to_vps, args=(_events.copy(),), daemon=True).start()
 
 # ── Per-event state ───────────────────────────────────────────────────────────
 def _state_file(event_code):
