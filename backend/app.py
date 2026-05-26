@@ -783,7 +783,8 @@ def short_link_redirect(code):
 
 @app.route("/", methods=["GET"])
 def health():
-    summary = {code: len(load_state(code).get("indexed_ids", [])) for code in _events}
+    # Use only in-memory cache — never make VPS calls here (Railway health checker pings this often)
+    summary = {code: len(_state_cache.get(code, {}).get("indexed_ids", [])) for code in _events}
     lines   = [f"قمرة 🌙 — {len(_events)} events"] + [f"  {k}: {v} photos" for k, v in summary.items()]
     return "\n".join(lines), 200
 
