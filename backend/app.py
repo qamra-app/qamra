@@ -772,18 +772,22 @@ def search_and_send(selfie_bytes, sender, event_code):
         send_msg(sender, "⏳ جاري تجهيز مجلد صورك الخاص، لحظة واحدة... 🗂️")
 
         guest_num   = get_next_guest_number(event_code)
+        print(f"[FOLDER] Creating for guest {guest_num}, {len(file_ids)} photos", flush=True)
         folder_link  = create_guest_folder(guest_num, file_ids, event["name"], file_map)
         short_link   = make_short_link(folder_link)
+        print(f"[FOLDER] Sending link to {sender}: {short_link}", flush=True)
         send_msg(sender,
             f"📂 جميع صورك في مجلدك الخاص:\n{short_link}\n\n"
             "شكراً لاستخدامك قمرة 🌙 نتمنى أن الصور عجبتك ✨"
         )
+        print(f"[FOLDER] Link sent, waiting before rating", flush=True)
         time.sleep(2)
         _set_conv(sender, "awaiting_rating", event_code=event_code)
         send_buttons(sender,
             "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*",
             ["🔄 بحث بوجه آخر"],
         )
+        print(f"[FOLDER] Rating sent — flow complete", flush=True)
     except Exception as e:
         print(f"[REPLY] ERROR folder: {e}", flush=True)
         send_msg(sender, f"✅ وجدت *{count}* صورة لك من *{event['name']}* 🎉 — تواصل مع المصور لاستلامها.")
