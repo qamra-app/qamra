@@ -751,8 +751,9 @@ def search_and_send(selfie_bytes, sender, event_code):
     try:
         phone_label = sender.replace("whatsapp:", "").replace("+", "")
 
-        # Send 2–3 latest photos (sorted by filename desc) before the folder link
-        teaser_ids = sorted(file_ids, key=lambda fid: file_map.get(fid, {}).get("name", ""), reverse=True)[:3]
+        # Send 3 random photos as teasers
+        import random
+        teaser_ids = random.sample(file_ids, min(3, len(file_ids)))
         send_msg(sender, f"🎉 وجدت *{count}* صورة لك من *{event['name']}*! إليك بعض منها:")
         with ThreadPoolExecutor(max_workers=3) as ex:
             ex.map(lambda fid: send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}"), teaser_ids)
