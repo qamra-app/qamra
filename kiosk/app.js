@@ -441,12 +441,12 @@ const App = (() => {
             clearInterval(folderPoll); folderPoll = null;
             folderUrl = d.folder_url;
             renderDriveQr(folderUrl);
-          } else if (d.status === "failed" || d.status === "not_found" || attempts > 30) {
+          } else if (d.status === "failed" || d.status === "not_found" || attempts > 50) {
             clearInterval(folderPoll); folderPoll = null;
             driveBar.style.display = "none";
           }
         } catch (_) {
-          if (attempts > 30) { clearInterval(folderPoll); folderPoll = null; driveBar.style.display = "none"; }
+          if (attempts > 50) { clearInterval(folderPoll); folderPoll = null; driveBar.style.display = "none"; }
         }
       }, 3000);
     } else {
