@@ -746,9 +746,8 @@ def search_and_send(selfie_bytes, sender, event_code):
         # Send 2–3 latest photos (sorted by filename desc) before the folder link
         teaser_ids = sorted(file_ids, key=lambda fid: file_map.get(fid, {}).get("name", ""), reverse=True)[:3]
         send_msg(sender, f"🎉 وجدت *{count}* صورة لك من *{event['name']}*! إليك بعض منها:")
-        for fid in teaser_ids:
-            send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}")
-            time.sleep(0.5)
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            ex.map(lambda fid: send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}"), teaser_ids)
 
         send_msg(sender, "⏳ جاري تجهيز مجلد صورك الخاص، لحظة واحدة... 🗂️")
 
