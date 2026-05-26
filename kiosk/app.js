@@ -398,6 +398,16 @@ const App = (() => {
     driveBox.innerHTML = "";
     if (driveQr) { try { driveQr.clear(); } catch(_) {} driveQr = null; }
 
+    const driveTitle = driveBar.querySelector(".drive-bar-title");
+    const driveSub   = driveBar.querySelector(".drive-bar-sub");
+
+    function showDriveLoading() {
+      driveBox.innerHTML = '<div class="drive-qr-skeleton"></div>';
+      driveTitle.textContent = "جاري تجهيز مجلدك...";
+      driveSub.textContent   = "سيظهر رمز QR خلال ثوانٍ ✨";
+      driveBar.style.display = "flex";
+    }
+
     function renderDriveQr(url) {
       driveBox.innerHTML = "";
       if (driveQr) { try { driveQr.clear(); } catch(_) {} driveQr = null; }
@@ -409,13 +419,16 @@ const App = (() => {
         colorLight:   "#FAF6EC",
         correctLevel: QRCode.CorrectLevel.M,
       });
+      driveTitle.textContent = "امسح لتحميل كل صورك";
+      driveSub.textContent   = "Google Drive · كل الصور دفعة واحدة";
+      driveBar.classList.add("drive-bar-ready");
       driveBar.style.display = "flex";
     }
 
     if (folderUrl && matches.length > 0) {
       renderDriveQr(folderUrl);
     } else if (sessionId && matches.length > 0) {
-      driveBar.style.display = "none";
+      showDriveLoading();
       let attempts = 0;
       folderPoll = setInterval(async () => {
         attempts++;

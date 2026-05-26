@@ -580,6 +580,28 @@ html, body {
   background: var(--paper);
   direction: rtl;
 }
+.drive-qr-skeleton {
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+  background: linear-gradient(90deg,
+    var(--bg-alt) 25%, var(--rule) 50%, var(--bg-alt) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 4px;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.drive-bar-ready {
+  animation: bar-pop 0.4s ease;
+}
+@keyframes bar-pop {
+  0%   { transform: scale(0.97); opacity: 0.6; }
+  60%  { transform: scale(1.01); }
+  100% { transform: scale(1);    opacity: 1; }
+}
 .drive-qr-box canvas, .drive-qr-box img {
   width: 120px !important;
   height: 120px !important;
