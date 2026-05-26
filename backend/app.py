@@ -162,7 +162,15 @@ def _find_user_for_owner(owner_phone):
 
 # ── Face service auth header ──────────────────────────────────────────────────
 def _event_btn_label(name: str) -> str:
-    return name
+    """Last word of the name — fits WhatsApp's 20-char button limit."""
+    return name.strip().split()[-1][:20]
+
+def _event_picker_body_and_btns(all_ev):
+    """Full names in the message body, short button labels the user can press."""
+    full_list = "\n".join(f"• {e['name']}" for _, e in all_ev)
+    body = f"🌙 لأي حفل تبحث عن صورك؟\n\n{full_list}"
+    btn_labels = [_event_btn_label(e["name"]) for _, e in all_ev[:3]]
+    return body, btn_labels
 
 def _face_hdrs():
     return {"X-API-Key": FACE_SERVICE_KEY}
@@ -1532,8 +1540,8 @@ def _handle_whatsapp():
                 all_ev = list(_events.items())
                 _set_conv(sender, "choosing_event")
                 _conv[sender]["today_events"] = [c for c, _ in all_ev]
-                btn_labels = [_event_btn_label(e["name"]) for _, e in all_ev[:3]]
-                return _reply_buttons("🌙 لأي حفل تبحث عن صورك؟", btn_labels)
+                body, btn_labels = _event_picker_body_and_btns(all_ev)
+                return _reply_buttons(body, btn_labels)
 
         _clear_conv(sender)
         _set_conv(sender, "awaiting_selfie", event_code=event_code)
@@ -1671,8 +1679,9 @@ def _handle_whatsapp():
             event = get_event(chosen)
             _set_conv(sender, "awaiting_selfie", event_code=chosen)
             return _reply(f"✨ اخترت *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد صورك 📸" + _SELFIE_TIPS)
-        btn_labels = [_event_btn_label(get_event(c)["name"]) for c in today_list if get_event(c)]
-        return _reply_buttons("اختر الحفل:", btn_labels)
+        all_ev = [(c, get_event(c)) for c in today_list if get_event(c)]
+        body, btn_labels = _event_picker_body_and_btns(all_ev)
+        return _reply_buttons(body, btn_labels)
 
     if state in ("new", "routing") and any(w in body_text for w in ("مرحبا", "هلا", "hi", "hello", "start", "مرحبً")):
         _clear_conv(sender)
@@ -1702,8 +1711,8 @@ def _handle_whatsapp():
                 all_ev = list(_events.items())
                 _set_conv(sender, "choosing_event")
                 _conv[sender]["today_events"] = [c for c, _ in all_ev]
-                btn_labels = [_event_btn_label(e["name"]) for _, e in all_ev[:3]]
-                return _reply_buttons("🌙 لأي حفل تبحث عن صورك؟", btn_labels)
+                body, btn_labels = _event_picker_body_and_btns(all_ev)
+                return _reply_buttons(body, btn_labels)
         elif picked_inquiry:
             _set_conv(sender, "awaiting_inquiry")
             return _reply("بكل سرور! اكتب استفسارك وسنوصله لفريق الدعم 💬")
@@ -1788,8 +1797,8 @@ def _handle_whatsapp():
                 all_ev = list(_events.items())
                 _set_conv(sender, "choosing_event")
                 _conv[sender]["today_events"] = [c for c, _ in all_ev]
-                btn_labels = [_event_btn_label(e["name"]) for _, e in all_ev[:3]]
-                return _reply_buttons("🌙 لأي حفل تبحث عن صورك؟", btn_labels)
+                body, btn_labels = _event_picker_body_and_btns(all_ev)
+                return _reply_buttons(body, btn_labels)
         try:
             rating = int(body_text.strip())
             if 1 <= rating <= 10:
