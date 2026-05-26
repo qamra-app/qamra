@@ -630,11 +630,10 @@ def search_and_send(selfie_bytes, sender, event_code):
     count = len(file_ids)
 
     try:
-        import random
         phone_label = sender.replace("whatsapp:", "").replace("+", "")
 
-        # Send 2–3 teaser photos before the folder link
-        teaser_ids = random.sample(file_ids, min(3, len(file_ids)))
+        # Send 2–3 latest photos (sorted by filename desc) before the folder link
+        teaser_ids = sorted(file_ids, key=lambda fid: file_map.get(fid, {}).get("name", ""), reverse=True)[:3]
         send_msg(sender, f"🎉 وجدت *{count}* صورة لك من *{event['name']}*! إليك بعض منها:")
         for fid in teaser_ids:
             send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}")
