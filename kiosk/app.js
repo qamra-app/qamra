@@ -415,8 +415,8 @@ const App = (() => {
       if (driveQr) { try { driveQr.clear(); } catch(_) {} driveQr = null; }
       driveQr = new QRCode(driveBox, {
         text:         url,
-        width:        120,
-        height:       120,
+        width:        180,
+        height:       180,
         colorDark:    "#1A1612",
         colorLight:   "#FAF6EC",
         correctLevel: QRCode.CorrectLevel.M,

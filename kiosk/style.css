@@ -582,8 +582,8 @@ html, body {
   direction: rtl;
 }
 .drive-qr-skeleton {
-  width: 120px;
-  height: 120px;
+  width: 180px;
+  height: 180px;
   flex-shrink: 0;
   background: linear-gradient(90deg,
     var(--bg-alt) 25%, var(--rule) 50%, var(--bg-alt) 75%);
@@ -604,8 +604,8 @@ html, body {
   100% { transform: scale(1);    opacity: 1; }
 }
 .drive-qr-box canvas, .drive-qr-box img {
-  width: 120px !important;
-  height: 120px !important;
+  width: 180px !important;
+  height: 180px !important;
   flex-shrink: 0;
   display: block;
 }
