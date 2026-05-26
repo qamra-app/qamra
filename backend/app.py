@@ -477,6 +477,17 @@ def run_index(event_code):
         file_map    = state.get("file_map", {})
         face_map    = state.get("face_map", {})  # persistedFaceId → drive file_id
 
+        # Full re-index: clear VPS collection so orphan tokens don't accumulate
+        if not indexed_ids:
+            try:
+                _session.delete(
+                    f"{FACE_SERVICE_URL}/v1/clear/{collection_id}",
+                    headers=_face_hdrs(), timeout=10,
+                )
+                print(f"[INDEX] Cleared VPS collection {collection_id}", flush=True)
+            except Exception as e:
+                print(f"[INDEX] VPS clear error (non-fatal): {e}", flush=True)
+
         photos = list_drive_photos(gdrive_folder_id)
         print(f"[INDEX] {event_code}: {len(photos)} photos, {len(indexed_ids)} indexed", flush=True)
 
@@ -1034,10 +1045,21 @@ def admin_reset_index(code):
     code = code.upper()
     if code not in _events:
         return jsonify({"error": "Not found"}), 404
+    event = _events[code]
+    collection_id = event.get("collection_id", "")
+    # Clear VPS face collection so orphan tokens don't accumulate
+    try:
+        _session.delete(
+            f"{FACE_SERVICE_URL}/v1/clear/{collection_id}",
+            headers=_face_hdrs(), timeout=10,
+        )
+    except Exception as e:
+        print(f"[RESET] VPS clear error (non-fatal): {e}", flush=True)
     state = load_state(code)
     state["indexed_ids"]  = []
     state["no_face_ids"]  = []
     state["face_map"]     = {}
+    state["file_map"]     = {}
     save_state(code, state)
     threading.Thread(target=run_index, args=(code,), daemon=True).start()
     return jsonify({"status": "reset", "event": code, "indexing": "started"}), 200
