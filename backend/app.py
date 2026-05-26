@@ -887,16 +887,17 @@ def match_api():
     session_id = hashlib.md5(f"{time.time()}{phone}".encode()).hexdigest()[:16]
     _folder_cache[session_id] = None
 
-    def _build_folder(sid, fid_list, ph, evt, ecode, fmap):
+    def _build_folder():
         try:
-            guest_num = get_next_guest_number(ecode)
-            url       = create_guest_folder(guest_num, fid_list, evt["name"], fmap)
-            _folder_cache[sid] = url
+            guest_num = get_next_guest_number(event_code)
+            url       = create_guest_folder(guest_num, file_ids, event["name"], file_map)
+            _folder_cache[session_id] = url
+            print(f"[FOLDER] Done session={session_id} files={len(file_ids)}", flush=True)
         except Exception as e:
-            _folder_cache[sid] = ""
-            print(f"[FOLDER] Error: {e}", flush=True)
+            _folder_cache[session_id] = ""
+            print(f"[FOLDER] Error session={session_id}: {e}", flush=True)
 
-    threading.Thread(target=_build_folder, args=(session_id, file_ids, phone, event, event_code, file_map), daemon=True).start()
+    threading.Thread(target=_build_folder, daemon=True).start()
 
     return jsonify({"matches": results, "session_id": session_id}), 200
 
@@ -1213,23 +1214,28 @@ def admin_reset_index(code):
 
 @app.route("/admin/test-folder", methods=["POST"])
 def admin_test_folder():
-    """Test Drive folder creation with a few real file IDs — helps diagnose failures."""
+    """Test Drive folder creation — helps diagnose failures.
+    ?limit=N controls how many files to use (default 50).
+    """
     if not _check_admin():
         return jsonify({"error": "Unauthorized"}), 401
     event_code = request.args.get("event", "DEFAULT").upper()
+    limit = int(request.args.get("limit", "50"))
     event = get_event(event_code)
     if not event:
         return jsonify({"error": f"No event {event_code}"}), 404
     state    = load_state(event_code)
     file_map = state.get("file_map", {})
-    file_ids = list(file_map.keys())[:5]
+    file_ids = list(file_map.keys())[:limit]
     if not file_ids:
         return jsonify({"error": "No indexed files yet"}), 503
     try:
-        import traceback as _tb
+        import traceback as _tb, time as _time
+        t0 = _time.time()
         guest_num = get_next_guest_number(event_code)
         url = create_guest_folder(guest_num, file_ids, event["name"], file_map)
-        return jsonify({"status": "ok", "url": url, "files_used": len(file_ids)}), 200
+        elapsed = round(_time.time() - t0, 2)
+        return jsonify({"status": "ok", "url": url, "files_used": len(file_ids), "elapsed_s": elapsed}), 200
     except Exception as e:
         return jsonify({"error": str(e), "traceback": _tb.format_exc()}), 500
 
