@@ -1,7 +1,6 @@
 import os
 import io
 import json
-import base64
 import threading
 import hashlib
 import time
@@ -41,15 +40,14 @@ sys.stderr = _LogCapture(sys.stderr)
 WASSENGER_API_KEY  = os.environ.get("WASSENGER_API_KEY", "")
 WASSENGER_API_URL  = "https://api.wassenger.com/v1/messages"
 
-FACEPP_API_KEY    = os.environ.get("FACEPP_API_KEY", "")
-FACEPP_API_SECRET = os.environ.get("FACEPP_API_SECRET", "")
-FACEPP_BASE       = "https://api-us.faceplusplus.com/facepp/v3"
+FACE_SERVICE_URL = os.environ.get("FACE_SERVICE_URL", "http://46.62.172.232:5001")
+FACE_SERVICE_KEY = os.environ.get("FACE_SERVICE_KEY", "qamra-face-2026")
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
 APP_URL                 = os.environ.get("APP_URL", "https://qamra-production.up.railway.app")
 ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "qamra-admin-2026")
 OWNER_PHONE             = os.environ.get("OWNER_PHONE", "97470263297")
 
-MATCH_CONF  = 80
+MATCH_CONF  = 30  # InsightFace cosine similarity * 100 (ArcFace threshold ~0.30)
 MEDIA_DIR   = "/tmp/qamra_media"
 EVENTS_FILE = "/tmp/qamra_events.json"   # ephemeral; backed up to Drive
 EVENTS_DRIVE_NAME = "_qamra_events_.json"
@@ -144,9 +142,9 @@ def _find_user_for_owner(owner_phone):
     return None
 
 
-# ── Face++ auth params ────────────────────────────────────────────────────────
-def _fp():
-    return {"api_key": FACEPP_API_KEY, "api_secret": FACEPP_API_SECRET}
+# ── Face service auth header ──────────────────────────────────────────────────
+def _face_hdrs():
+    return {"X-API-Key": FACE_SERVICE_KEY}
 
 # ── Google Drive ──────────────────────────────────────────────────────────────
 def _drive(write=False):
@@ -363,96 +361,64 @@ def _clear_conv(phone):
 _folder_cache = {}  # session_id -> folder_url | None (building) | "" (failed)
 
 # ── Azure Face helpers ────────────────────────────────────────────────────────
-def resize_for_azure(image_bytes):
-    try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        if img.width > 1920 or img.height > 1920:
-            img.thumbnail((1920, 1920), Image.LANCZOS)
-        out = io.BytesIO()
-        img.save(out, format="JPEG", quality=80)
-        return out.getvalue()
-    except Exception as e:
-        print(f"[RESIZE] {e}", flush=True)
-        return image_bytes
-
 def ensure_facelist(face_list_id):
-    r = _session.post(f"{FACEPP_BASE}/faceset/create",
-                      data={**_fp(), "outer_id": face_list_id, "display_name": face_list_id},
-                      timeout=10)
-    if r.status_code == 200:
-        print(f"[FACELIST] Created: {face_list_id}", flush=True)
-    elif "FACESET_EXIST" in r.text:
-        pass  # already exists
-    else:
-        print(f"[FACELIST] Create response {r.status_code}: {r.text[:200]}", flush=True)
+    pass  # InsightFace uses SQLite collections — no setup needed
 
 def train_facelist(face_list_id):
-    pass  # Face++ doesn't require explicit training
+    pass  # not needed
 
 def index_face(image_bytes, file_id, face_list_id):
-    """Detect all faces in image and add each to FaceSet. Returns (list_of_face_tokens, count)."""
-    image_bytes = resize_for_azure(image_bytes)
-    img_b64     = base64.b64encode(image_bytes).decode()
+    """Send photo to VPS face service, returns (face_tokens, count)."""
     try:
-        r = _session.post(f"{FACEPP_BASE}/detect",
-                          data={**_fp(), "image_base64": img_b64},
-                          timeout=15)
+        r = _session.post(
+            f"{FACE_SERVICE_URL}/v1/index",
+            files={"photo": ("photo.jpg", image_bytes, "image/jpeg")},
+            data={"file_id": file_id, "collection_id": face_list_id},
+            headers=_face_hdrs(),
+            timeout=30,
+        )
         if r.status_code != 200:
-            print(f"[INDEX] Detect error {r.status_code}: {r.text[:200]}", flush=True)
+            print(f"[INDEX] Face service error {r.status_code}: {r.text[:200]}", flush=True)
             return [], 0
-        if not r.json().get("faces"):
-            return [], 0
-        face_tokens = [f["face_token"] for f in r.json()["faces"]]
+        tokens = r.json().get("face_tokens", [])
+        return tokens, len(tokens)
     except Exception as e:
-        print(f"[INDEX] Detect error: {e}", flush=True)
+        print(f"[INDEX] Error: {e}", flush=True)
         return [], 0
 
-    persisted = []
-    for i in range(0, len(face_tokens), 5):
-        chunk = face_tokens[i:i+5]
-        try:
-            r = _session.post(f"{FACEPP_BASE}/faceset/addface",
-                              data={**_fp(), "outer_id": face_list_id,
-                                    "face_tokens": ",".join(chunk)},
-                              timeout=15)
-            if r.status_code == 200:
-                persisted.extend(chunk)
-            else:
-                print(f"[INDEX] AddFace error {r.status_code}: {r.text[:200]}", flush=True)
-        except Exception as e:
-            print(f"[INDEX] AddFace error: {e}", flush=True)
-    return persisted, len(persisted)
-
 def count_faces(image_bytes):
-    image_bytes = resize_for_azure(image_bytes)
-    img_b64     = base64.b64encode(image_bytes).decode()
     try:
-        r = _session.post(f"{FACEPP_BASE}/detect",
-                          data={**_fp(), "image_base64": img_b64},
-                          timeout=15)
+        r = _session.post(
+            f"{FACE_SERVICE_URL}/v1/detect",
+            files={"photo": ("photo.jpg", image_bytes, "image/jpeg")},
+            headers=_face_hdrs(),
+            timeout=15,
+        )
         if r.status_code == 200:
-            return len(r.json().get("faces", []))
+            return r.json().get("count", 1)
         return 1
     except Exception as e:
-        print(f"[FACES] detect error: {e}", flush=True)
+        print(f"[COUNT] Error: {e}", flush=True)
         return 1
 
 def search_by_selfie(selfie_bytes, face_list_id):
-    """Search FaceSet for faces matching the selfie."""
-    selfie_bytes = resize_for_azure(selfie_bytes)
-    img_b64      = base64.b64encode(selfie_bytes).decode()
+    """Search VPS face service for faces matching the selfie."""
     try:
-        r = _session.post(f"{FACEPP_BASE}/search",
-                          data={**_fp(), "outer_id": face_list_id,
-                                "image_base64": img_b64,
-                                "return_result_count": 1000},
-                          timeout=30)
+        r = _session.post(
+            f"{FACE_SERVICE_URL}/v1/search",
+            files={"photo": ("selfie.jpg", selfie_bytes, "image/jpeg")},
+            data={"collection_id": face_list_id},
+            headers=_face_hdrs(),
+            timeout=30,
+        )
         if r.status_code != 200:
-            print(f"[SEARCH] Face++ error {r.status_code}: {r.text[:200]}", flush=True)
+            print(f"[SEARCH] Face service error {r.status_code}: {r.text[:200]}", flush=True)
             return []
         results = r.json().get("results", [])
-        matches = [{"persistedFaceId": m["face_token"], "confidence": m["confidence"] / 100.0}
-                   for m in results if m.get("confidence", 0) >= MATCH_CONF]
+        matches = [
+            {"persistedFaceId": m["face_token"], "confidence": m["confidence"] / 100.0}
+            for m in results if m.get("confidence", 0) >= MATCH_CONF
+        ]
         print(f"[SEARCH] {len(matches)} matches in {face_list_id}", flush=True)
         return matches
     except Exception as e:
@@ -566,7 +532,7 @@ def _auto_index_loop():
                 run_index(code)
             except Exception as e:
                 print(f"[AUTO-INDEX] {code} error: {e}", flush=True)
-        time.sleep(300)
+        time.sleep(60)
 
 threading.Thread(target=_auto_index_loop, daemon=True).start()
 
@@ -1060,6 +1026,21 @@ def admin_add_event():
 
     threading.Thread(target=run_index, args=(code,), daemon=True).start()
     return jsonify({"status": "created", "event": code, "indexing": "started", "landing": f"{APP_URL}/event/{code}"}), 201
+
+@app.route("/admin/reset-index/<code>", methods=["POST"])
+def admin_reset_index(code):
+    if not _check_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+    code = code.upper()
+    if code not in _events:
+        return jsonify({"error": "Not found"}), 404
+    state = load_state(code)
+    state["indexed_ids"]  = []
+    state["no_face_ids"]  = []
+    state["face_map"]     = {}
+    save_state(code, state)
+    threading.Thread(target=run_index, args=(code,), daemon=True).start()
+    return jsonify({"status": "reset", "event": code, "indexing": "started"}), 200
 
 @app.route("/admin/event/<code>", methods=["DELETE"])
 def admin_delete_event(code):
