@@ -856,13 +856,14 @@ def folder_status(session_id):
             f"{FACE_SERVICE_URL}/v1/kv/folder_{session_id}",
             headers=_face_hdrs(), timeout=5,
         )
+        print(f"[FOLDER_STATUS] KV lookup sid={session_id} status={r.status_code}", flush=True)
         if r.status_code == 200:
             url = r.json().get("value", "")
             if url:
                 _folder_cache[session_id] = url  # warm local cache
                 return jsonify({"status": "ready", "folder_url": url}), 200
-    except Exception:
-        pass
+    except Exception as kv_err:
+        print(f"[FOLDER_STATUS] KV error sid={session_id}: {kv_err}", flush=True)
     return jsonify({"status": "not_found"}), 404
 
 @app.route("/match", methods=["POST"])
