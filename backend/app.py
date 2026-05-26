@@ -48,7 +48,7 @@ ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "qamra-admin-2026")
 OWNER_PHONE             = os.environ.get("OWNER_PHONE", "97470263297")
 GDRIVE_FOLDER_ID        = os.environ.get("GDRIVE_FOLDER_ID", "")
 
-MATCH_CONF  = int(os.environ.get("MATCH_CONF", "45"))  # InsightFace cosine similarity * 100
+MATCH_CONF  = int(os.environ.get("MATCH_CONF", "50"))  # InsightFace cosine similarity * 100
 MEDIA_DIR   = "/tmp/qamra_media"
 EVENTS_FILE = "/tmp/qamra_events.json"   # ephemeral; backed up to Drive
 EVENTS_DRIVE_NAME = "_qamra_events_.json"
