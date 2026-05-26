@@ -623,23 +623,78 @@ _SELFIE_TIPS = (
 )
 
 # ── Ratings ───────────────────────────────────────────────────────────────────
+_RATINGS_XLSX = "_qamra_ratings_.xlsx"
+
+def _append_rating_to_excel(event_code, phone, rating, comment, ts):
+    import openpyxl
+    from googleapiclient.http import MediaIoBaseUpload
+    from datetime import datetime, timezone
+    svc = _drive(write=True)
+    dt  = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    # Find existing file
+    resp = svc.files().list(
+        q=f"name='{_RATINGS_XLSX}' and trashed=false",
+        fields="files(id)", pageSize=1,
+    ).execute()
+    files = resp.get("files", [])
+
+    if files:
+        file_id = files[0]["id"]
+        raw = download_file(file_id)
+        wb  = openpyxl.load_workbook(io.BytesIO(raw))
+        ws  = wb.active
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Ratings"
+        ws.append(["Timestamp", "Phone", "Event", "Rating", "Comment"])
+        file_id = None
+
+    ws.append([dt, f"+{phone}", event_code, rating, comment])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    if file_id:
+        svc.files().update(
+            fileId=file_id,
+            media_body=MediaIoBaseUpload(buf, mimetype=mime),
+        ).execute()
+    else:
+        svc.files().create(
+            body={"name": _RATINGS_XLSX},
+            media_body=MediaIoBaseUpload(buf, mimetype=mime),
+            fields="id",
+        ).execute()
+
+    print(f"[RATING] Excel updated: {phone} {rating}/10 for {event_code}", flush=True)
+
 def save_rating(event_code, phone, rating, comment=""):
+    # Save to VPS KV
     key = f"ratings_{event_code}"
     try:
         r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/{key}", headers=_face_hdrs(), timeout=10)
         ratings = json.loads(r.json()["value"]) if r.status_code == 200 else []
     except Exception:
         ratings = []
-    ratings.append({"phone": phone, "rating": rating, "comment": comment, "ts": time.time()})
+    ts = time.time()
+    ratings.append({"phone": phone, "rating": rating, "comment": comment, "ts": ts})
     try:
         _session.put(
             f"{FACE_SERVICE_URL}/v1/kv/{key}",
             json={"value": json.dumps(ratings, ensure_ascii=False)},
             headers=_face_hdrs(), timeout=10,
         )
-        print(f"[RATING] {phone} rated {rating}/10 for {event_code}", flush=True)
     except Exception as e:
-        print(f"[RATING] Save error: {e}", flush=True)
+        print(f"[RATING] VPS save error: {e}", flush=True)
+    # Save to Excel on Drive
+    try:
+        _append_rating_to_excel(event_code, phone, rating, comment, ts)
+    except Exception as e:
+        print(f"[RATING] Excel error: {e}", flush=True)
 
 # ── WhatsApp search + send ────────────────────────────────────────────────────
 def search_and_send(selfie_bytes, sender, event_code):
@@ -1655,7 +1710,12 @@ def _handle_whatsapp():
             if 1 <= rating <= 10:
                 _set_conv(sender, "awaiting_comment", event_code=conv.get("event_code"))
                 _conv[sender]["pending_rating"] = rating
-                return _reply(f"{'⭐' * rating}\n\nشكراً على تقييمك! 🙏\n\nهل تودّ إضافة تعليق؟ اكتبه الآن أو أرسل *تخطي*")
+                threading.Thread(target=send_buttons, args=(
+                    sender,
+                    f"{'⭐' * rating}\n\nشكراً على تقييمك! 🙏\n\nهل تودّ إضافة تعليق؟",
+                    ["✍️ أضف تعليقاً", "⏭️ تخطي"],
+                ), daemon=True).start()
+                return "", 200
         except (ValueError, TypeError):
             pass
         return _reply("من فضلك أرسل رقماً من *1* إلى *10* ⭐")
@@ -1663,8 +1723,11 @@ def _handle_whatsapp():
     if state == "awaiting_comment":
         event_code = conv.get("event_code", "DEFAULT")
         rating     = _conv.get(sender, {}).get("pending_rating", 0)
-        skip       = body_text.strip() in ("تخطي", "skip", "لا", "no", "-")
+        skip       = body_text.strip() in ("⏭️ تخطي", "تخطي", "2", "٢", "skip", "لا", "no", "-")
         comment    = "" if skip else body_text.strip()
+        # If they clicked "add comment" button, prompt them to write it
+        if body_text.strip() in ("✍️ أضف تعليقاً", "1", "١"):
+            return _reply("اكتب تعليقك وسنحفظه 📝")
         threading.Thread(target=save_rating, args=(event_code, sender, rating, comment), daemon=True).start()
         _clear_conv(sender)
         return _reply("✅ تم حفظ تقييمك، شكراً جزيلاً! 🌙\n\nنراك في المرة القادمة 🎉")
