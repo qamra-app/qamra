@@ -969,8 +969,8 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   background:var(--bg-alt);cursor:pointer;
 }}
 .photo-card img{{
-  width:100%;height:100%;object-fit:cover;display:block;
-  transition:transform .3s ease;
+  width:100%;height:100%;object-fit:contain;display:block;
+  background:var(--bg);transition:transform .3s ease;
 }}
 .photo-card:active img{{transform:scale(1.04)}}
 .photo-card .skeleton{{
@@ -1272,7 +1272,7 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 .gallery{{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:3px;padding:3px;background:var(--bg-alt)}}
 @media(max-width:480px){{.gallery{{grid-template-columns:repeat(2,1fr)}}}}
 .photo-card{{position:relative;aspect-ratio:4/3;overflow:hidden;background:var(--bg-alt);cursor:pointer}}
-.photo-card img{{width:100%;height:100%;object-fit:cover;display:block;transition:transform .3s}}
+.photo-card img{{width:100%;height:100%;object-fit:contain;background:var(--bg);display:block;transition:transform .3s}}
 .photo-card:active img{{transform:scale(1.04)}}
 .skeleton{{position:absolute;inset:0;background:linear-gradient(90deg,var(--bg-alt) 25%,var(--rule) 50%,var(--bg-alt) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite}}
 @keyframes shimmer{{0%{{background-position:200% 0}}100%{{background-position:-200% 0}}}}
