@@ -783,16 +783,27 @@ def search_and_send(selfie_bytes, sender, event_code):
             f"🖼️ معرض صورك الخاص جاهز:\n{gallery_link}\n\n"
             "اضغط على أي صورة لحفظها بجودتها الأصلية، أو احفظ الكل دفعة واحدة 🌙"
         )
-        print(f"[FOLDER] Link sent, waiting before rating", flush=True)
-        time.sleep(2)
-        _set_conv(sender, "awaiting_rating", event_code=event_code)
+
+        # Register guest for future new-photo notifications (background)
+        threading.Thread(
+            target=_register_guest,
+            args=(event_code, phone_label, selfie_bytes, file_ids, gallery_token),
+            daemon=True,
+        ).start()
+
+        time.sleep(1)
+
+        # Ask if they want photos sent directly on WhatsApp
+        _set_conv(sender, "awaiting_send_confirm", event_code=event_code)
+        _conv[sender]["meta"] = {"file_ids": file_ids, "gallery_link": gallery_link}
         send_buttons(sender,
-            "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*",
-            ["🔄 بحث بوجه آخر"],
+            "📲 هل تريد أن أرسل لك صورك مباشرة هنا؟\n"
+            "⚠️ ملاحظة: الصور عبر واتساب تكون مضغوطة. للجودة الأصلية افتح معرضك الشخصي واحفظ منه.",
+            ["نعم، أرسل صوري 📲", "لا، شكراً"],
         )
-        print(f"[FOLDER] Rating sent — flow complete", flush=True)
+        print(f"[SEARCH] Flow complete — awaiting send confirm", flush=True)
     except Exception as e:
-        print(f"[REPLY] ERROR folder: {e}", flush=True)
+        print(f"[REPLY] ERROR: {e}", flush=True)
         send_msg(sender, f"✅ وجدت *{count}* صورة لك من *{event['name']}* 🎉 — تواصل مع المصور لاستلامها.")
 
 # ── Short link redirect store ─────────────────────────────────────────────────
@@ -843,6 +854,152 @@ def load_gallery_token(token: str):
     except Exception as e:
         print(f"[GALLERY] KV load error: {e}", flush=True)
         return None
+
+def _update_gallery_token_file_ids(token: str, all_file_ids: list):
+    """Overwrite file_ids in an existing gallery token so the same URL shows updated photos."""
+    try:
+        r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/gallery_{token}", headers=_face_hdrs(), timeout=10)
+        if r.status_code != 200:
+            return
+        data = json.loads(r.json()["value"])
+        data["file_ids"] = all_file_ids
+        _session.put(
+            f"{FACE_SERVICE_URL}/v1/kv/gallery_{token}",
+            json={"value": json.dumps(data, ensure_ascii=False)},
+            headers=_face_hdrs(), timeout=10,
+        )
+    except Exception as e:
+        print(f"[GALLERY] Token update error: {e}", flush=True)
+
+# ── Guest notification registry ───────────────────────────────────────────────
+import base64
+
+NOTIFY_COOLDOWN = 1800  # 30 minutes between notifications per guest
+
+def _register_guest(event_code: str, phone: str, selfie_bytes: bytes, file_ids: list, token: str):
+    """Store guest selfie + match state so notification loop can re-search them."""
+    try:
+        guest_data = {
+            "phone":         phone,
+            "event_code":    event_code,
+            "selfie_b64":    base64.b64encode(selfie_bytes).decode(),
+            "file_ids":      file_ids,
+            "token":         token,
+            "last_notified": int(time.time()),
+        }
+        _session.put(
+            f"{FACE_SERVICE_URL}/v1/kv/guest_{event_code}_{phone}",
+            json={"value": json.dumps(guest_data, ensure_ascii=False)},
+            headers=_face_hdrs(), timeout=10,
+        )
+        # Update guest index for this event
+        try:
+            r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/guest_index_{event_code}", headers=_face_hdrs(), timeout=5)
+            index = json.loads(r.json()["value"]) if r.status_code == 200 else []
+        except Exception:
+            index = []
+        if phone not in index:
+            index.append(phone)
+            _session.put(
+                f"{FACE_SERVICE_URL}/v1/kv/guest_index_{event_code}",
+                json={"value": json.dumps(index)},
+                headers=_face_hdrs(), timeout=10,
+            )
+        print(f"[NOTIFY] Registered guest {phone} for {event_code}", flush=True)
+    except Exception as e:
+        print(f"[NOTIFY] Registration error: {e}", flush=True)
+
+def _notify_new_photos_for_event(event_code: str):
+    try:
+        r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/guest_index_{event_code}", headers=_face_hdrs(), timeout=10)
+        if r.status_code != 200:
+            return
+        index = json.loads(r.json()["value"])
+    except Exception as e:
+        print(f"[NOTIFY] Index load error {event_code}: {e}", flush=True)
+        return
+
+    event = get_event(event_code)
+    if not event:
+        return
+
+    now = int(time.time())
+    state = load_state(event_code)
+    face_map = state.get("face_map", {})
+
+    for phone in index:
+        try:
+            r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/guest_{event_code}_{phone}", headers=_face_hdrs(), timeout=10)
+            if r.status_code != 200:
+                continue
+            guest_data = json.loads(r.json()["value"])
+
+            if now - guest_data.get("last_notified", 0) < NOTIFY_COOLDOWN:
+                continue
+
+            selfie_bytes = base64.b64decode(guest_data["selfie_b64"])
+            matches = search_by_selfie(selfie_bytes, event["collection_id"])
+            if not matches:
+                continue
+
+            seen, all_file_ids = set(), []
+            for m in matches:
+                fid = face_map.get(m["persistedFaceId"])
+                if fid and fid not in seen:
+                    seen.add(fid)
+                    all_file_ids.append(fid)
+
+            old_ids   = set(guest_data.get("file_ids", []))
+            new_ids   = [fid for fid in all_file_ids if fid not in old_ids]
+            if not new_ids:
+                continue
+
+            # Update the existing gallery token in-place — same URL, new photos visible
+            token = guest_data.get("token", "")
+            if token:
+                _update_gallery_token_file_ids(token, all_file_ids)
+
+            gallery_link = f"{APP_URL}/gallery/{event_code}/g/{token}" if token else ""
+
+            # Send new photos directly on WhatsApp
+            send_msg(f"+{phone}",
+                f"📸 مرحباً! وجدنا *{len(new_ids)}* صور جديدة لك من *{event['name']}*! 🎉"
+            )
+            for fid in new_ids[:10]:
+                send_msg(f"+{phone}", " ", media_url=f"{APP_URL}/photo/{fid}")
+                time.sleep(0.5)
+
+            if gallery_link:
+                send_msg(f"+{phone}",
+                    f"🖼️ معرضك الشخصي تم تحديثه تلقائياً بصورك الجديدة.\n"
+                    f"افتح نفس الرابط للجودة الأصلية 🌙\n{gallery_link}"
+                )
+
+            # Update guest registry
+            guest_data["file_ids"]      = all_file_ids
+            guest_data["last_notified"] = now
+            _session.put(
+                f"{FACE_SERVICE_URL}/v1/kv/guest_{event_code}_{phone}",
+                json={"value": json.dumps(guest_data, ensure_ascii=False)},
+                headers=_face_hdrs(), timeout=10,
+            )
+            print(f"[NOTIFY] {phone}: {len(new_ids)} new photos sent", flush=True)
+        except Exception as e:
+            print(f"[NOTIFY] Error for guest {phone}: {e}", flush=True)
+
+def _notification_loop():
+    time.sleep(60)  # Initial warm-up delay
+    while True:
+        with _events_lock:
+            codes = list(_events.keys())
+        for code in codes:
+            try:
+                _notify_new_photos_for_event(code)
+            except Exception as e:
+                print(f"[NOTIFY] Loop error {code}: {e}", flush=True)
+        time.sleep(NOTIFY_COOLDOWN)  # 30 minutes
+
+threading.Thread(target=_notification_loop, daemon=True).start()
 
 # ── Gallery HTML template ─────────────────────────────────────────────────────
 def _gallery_html(event_name: str, token: str, event_code: str, file_ids: list, file_map: dict) -> str:
@@ -929,6 +1086,25 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   flex-shrink:0;
 }}
 .btn-save-all:active{{background:var(--ink-soft)}}
+.wa-bar{{
+  padding:10px 16px;
+  background:var(--paper);border-bottom:1px solid var(--rule);
+  display:flex;flex-direction:column;gap:4px;
+}}
+.btn-send-wa{{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--gold-soft);color:var(--ink);
+  border:1px solid rgba(201,169,110,.35);padding:10px 18px;
+  font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:500;
+  cursor:pointer;text-decoration:none;white-space:nowrap;
+  transition:background .15s;width:100%;justify-content:center;
+}}
+.btn-send-wa:active{{background:rgba(201,169,110,.25)}}
+.btn-send-wa:disabled{{opacity:.45;cursor:not-allowed}}
+.wa-disclaimer{{
+  font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;
+  color:var(--ink-mute);text-align:center;
+}}
 
 /* ── Gallery grid ── */
 .gallery{{
@@ -1026,6 +1202,13 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   </a>
 </div>
 
+<div class="wa-bar">
+  <button class="btn-send-wa" id="btn-send-wa" onclick="sendToWa()">
+    📨 أرسل لي الصور على واتساب
+  </button>
+  <div class="wa-disclaimer">الصور المرسلة عبر واتساب مضغوطة — للجودة الأصلية استخدم "حفظ الكل" ↑</div>
+</div>
+
 <div class="gallery" id="gallery"></div>
 
 <div class="lightbox" id="lightbox">
@@ -1042,8 +1225,10 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 <div class="footer">Powered by QAMRA · صورك بجودتها الأصلية</div>
 
 <script>
-const photos = {photos_js};
-const APP_URL = "{APP_URL}";
+const photos    = {photos_js};
+const APP_URL   = "{APP_URL}";
+const TOKEN     = "{token}";
+const EVENT_CODE = "{event_code}";
 
 function thumbUrl(id) {{
   return APP_URL + '/photo/' + id;
@@ -1053,6 +1238,26 @@ function lbUrl(id) {{
 }}
 function dlUrl(id) {{
   return 'https://drive.google.com/uc?export=download&id=' + id;
+}}
+
+async function sendToWa() {{
+  const btn = document.getElementById('btn-send-wa');
+  btn.disabled = true;
+  btn.textContent = '⏳ جاري الإرسال...';
+  try {{
+    const r = await fetch(APP_URL + '/gallery/' + EVENT_CODE + '/g/' + TOKEN + '/send-to-wa', {{method: 'POST'}});
+    const d = await r.json();
+    if (r.ok) {{
+      btn.textContent = '✅ تم! تحقق من واتساب';
+    }} else {{
+      btn.disabled = false;
+      btn.textContent = '📨 أرسل لي الصور على واتساب';
+      alert(d.error || 'حصل خطأ، حاول مرة ثانية');
+    }}
+  }} catch(e) {{
+    btn.disabled = false;
+    btn.textContent = '📨 أرسل لي الصور على واتساب';
+  }}
 }}
 
 const gallery = document.getElementById('gallery');
@@ -1172,6 +1377,48 @@ def gallery_zip(event_code, token):
         mimetype="application/zip",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{requests.utils.quote(fname)}"},
     )
+
+
+@app.route("/gallery/<event_code>/g/<token>/send-to-wa", methods=["POST"])
+def gallery_send_to_wa(event_code, token):
+    data = load_gallery_token(token)
+    if not data:
+        return jsonify({"error": "رابط غير صالح أو منتهي"}), 410
+
+    phone    = data.get("phone", "").strip()
+    file_ids = data.get("file_ids", [])
+    if not phone:
+        return jsonify({"error": "لا يوجد رقم هاتف مرتبط بهذا المعرض"}), 400
+    if not file_ids:
+        return jsonify({"error": "لا يوجد صور"}), 400
+
+    now = int(time.time())
+    if now - data.get("last_wa_send", 0) < 600:
+        return jsonify({"error": "يرجى الانتظار 10 دقائق قبل الطلب مجدداً"}), 429
+
+    data["last_wa_send"] = now
+    try:
+        _session.put(
+            f"{FACE_SERVICE_URL}/v1/kv/gallery_{token}",
+            json={"value": json.dumps(data, ensure_ascii=False)},
+            headers=_face_hdrs(), timeout=10,
+        )
+    except Exception as e:
+        print(f"[SEND_TO_WA] Token update error: {e}", flush=True)
+
+    ev_name = (get_event(event_code.upper()) or {}).get("name", event_code)
+
+    def _send():
+        send_msg(f"+{phone}",
+            f"📲 إليك صورك من *{ev_name}* 🌙\n"
+            "ملاحظة: الصور مضغوطة بواسطة واتساب. للجودة الأصلية افتح معرضك الشخصي واضغط 'حفظ الكل'."
+        )
+        for fid in file_ids:
+            send_msg(f"+{phone}", " ", media_url=f"{APP_URL}/photo/{fid}")
+            time.sleep(0.8)
+
+    threading.Thread(target=_send, daemon=True).start()
+    return jsonify({"status": "sending", "count": len(file_ids)}), 200
 
 
 @app.route("/gallery/<event_code>/count", methods=["GET"])
@@ -2532,6 +2779,52 @@ def _handle_whatsapp():
             # Session expired
             _clear_conv(sender)
             threading.Thread(target=send_buttons, args=(sender, "🌙 انتهت جلسة الدعم. كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
+            return "", 200
+
+    if state == "awaiting_send_confirm":
+        meta      = conv.get("meta") or _conv.get(sender, {}).get("meta") or {}
+        file_ids  = meta.get("file_ids", [])
+        said_yes  = body_text.strip() in ("نعم، أرسل صوري 📲", "نعم", "yes", "1", "١")
+        said_no   = body_text.strip() in ("لا، شكراً", "لا", "no", "2", "٢")
+        is_rating = False
+        try:
+            v = int(body_text.strip())
+            if 1 <= v <= 10:
+                is_rating = True
+        except (ValueError, TypeError):
+            pass
+
+        if said_yes and file_ids:
+            event_code_s = conv.get("event_code", "DEFAULT")
+            ev_name      = (get_event(event_code_s) or {}).get("name", event_code_s)
+            def _send_all_photos():
+                send_msg(sender,
+                    f"📲 إليك صورك من *{ev_name}* 🌙\n"
+                    "ملاحظة: الصور مضغوطة بواسطة واتساب. للجودة الأصلية افتح معرضك الشخصي."
+                )
+                for fid in file_ids:
+                    send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}")
+                    time.sleep(0.8)
+                _set_conv(sender, "awaiting_rating", event_code=event_code_s)
+                send_buttons(sender,
+                    "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*",
+                    ["🔄 بحث بوجه آخر"],
+                )
+            threading.Thread(target=_send_all_photos, daemon=True).start()
+            return "", 200
+
+        # No, or rating typed, or unknown text → skip to rating
+        _set_conv(sender, "awaiting_rating", event_code=conv.get("event_code"))
+        if is_rating:
+            # Re-inject the rating value by falling through
+            _conv[sender]["state"] = "awaiting_rating"
+            body_text_forwarded = body_text
+            # handle inline below — fall through to awaiting_rating block
+        else:
+            send_buttons(sender,
+                "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*",
+                ["🔄 بحث بوجه آخر"],
+            )
             return "", 200
 
     if state == "awaiting_rating":
