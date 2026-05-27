@@ -798,7 +798,7 @@ def search_and_send(selfie_bytes, sender, event_code):
         _conv[sender]["meta"] = {"file_ids": file_ids, "gallery_link": gallery_link}
         send_buttons(sender,
             "📲 هل تريد أن أرسل لك صورك مباشرة هنا؟\n"
-            "⚠️ ملاحظة: الصور عبر واتساب تكون مضغوطة. للجودة الأصلية افتح معرضك الشخصي واحفظ منه.",
+            "⚠️ تنبيه: الصور المرسلة عبر واتساب ستكون بجودة أقل من الأصلية. للجودة الكاملة افتح معرضك الشخصي واحفظ منه.",
             ["نعم، أرسل صوري 📲", "لا، شكراً"],
         )
         print(f"[SEARCH] Flow complete — awaiting send confirm", flush=True)
@@ -971,8 +971,7 @@ def _notify_new_photos_for_event(event_code: str):
 
             if gallery_link:
                 send_msg(f"+{phone}",
-                    f"🖼️ معرضك الشخصي تم تحديثه تلقائياً بصورك الجديدة.\n"
-                    f"افتح نفس الرابط للجودة الأصلية 🌙\n{gallery_link}"
+                    f"🌙 للجودة الأصلية كاملة، افتح معرضك الشخصي من هنا:\n{gallery_link}"
                 )
 
             # Update guest registry
@@ -1206,7 +1205,7 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   <button class="btn-send-wa" id="btn-send-wa" onclick="sendToWa()">
     📨 أرسل لي الصور على واتساب
   </button>
-  <div class="wa-disclaimer">الصور المرسلة عبر واتساب مضغوطة — للجودة الأصلية استخدم "حفظ الكل" ↑</div>
+  <div class="wa-disclaimer">الصور عبر واتساب ستكون بجودة أقل — للجودة الكاملة اضغط "حفظ الكل" ↑</div>
 </div>
 
 <div class="gallery" id="gallery"></div>
@@ -1411,7 +1410,7 @@ def gallery_send_to_wa(event_code, token):
     def _send():
         send_msg(f"+{phone}",
             f"📲 إليك صورك من *{ev_name}* 🌙\n"
-            "ملاحظة: الصور مضغوطة بواسطة واتساب. للجودة الأصلية افتح معرضك الشخصي واضغط 'حفظ الكل'."
+            "تنبيه: الصور المرسلة هنا ستكون بجودة أقل من الأصلية. للجودة الكاملة افتح معرضك الشخصي واضغط 'حفظ الكل'."
         )
         for fid in file_ids:
             send_msg(f"+{phone}", " ", media_url=f"{APP_URL}/photo/{fid}")
@@ -2800,7 +2799,7 @@ def _handle_whatsapp():
             def _send_all_photos():
                 send_msg(sender,
                     f"📲 إليك صورك من *{ev_name}* 🌙\n"
-                    "ملاحظة: الصور مضغوطة بواسطة واتساب. للجودة الأصلية افتح معرضك الشخصي."
+                    "تنبيه: الصور المرسلة هنا ستكون بجودة أقل من الأصلية. للجودة الكاملة افتح معرضك الشخصي."
                 )
                 for fid in file_ids:
                     send_msg(sender, " ", media_url=f"{APP_URL}/photo/{fid}")
