@@ -927,33 +927,7 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   white-space:nowrap;transition:background .15s;
   flex-shrink:0;
 }}
-.btn-save-all::after{{content:"";display:inline-block;width:12px;height:1px;background:currentColor;margin-right:4px}}
 .btn-save-all:active{{background:var(--ink-soft)}}
-.btn-save-all:disabled{{opacity:.45;cursor:not-allowed}}
-
-/* ── Zip status ── */
-.zip-bar{{
-  display:none;align-items:center;gap:12px;
-  padding:11px 16px;
-  background:var(--paper);border-bottom:1px solid var(--rule);
-}}
-.zip-bar.open{{display:flex}}
-.zip-spinner{{
-  width:16px;height:16px;flex-shrink:0;
-  border:2px solid var(--rule);border-top-color:var(--gold);
-  border-radius:50%;animation:spin .8s linear infinite;
-}}
-@keyframes spin{{to{{transform:rotate(360deg)}}}}
-.zip-text{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;color:var(--ink-mute);flex:1}}
-.btn-zip{{
-  display:none;align-items:center;gap:8px;
-  background:#2D6A3F;color:#FAF6EC;
-  border:none;padding:9px 16px;
-  font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:500;
-  cursor:pointer;text-decoration:none;white-space:nowrap;
-}}
-.btn-zip.ready{{display:inline-flex}}
-.btn-zip:active{{background:#235531}}
 
 /* ── Gallery grid ── */
 .gallery{{
@@ -980,22 +954,19 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 }}
 @keyframes shimmer{{0%{{background-position:200% 0}}100%{{background-position:-200% 0}}}}
 .photo-card .overlay{{
-  position:absolute;inset:0;
-  background:linear-gradient(to top,rgba(26,22,18,.68) 0%,transparent 48%);
-  opacity:0;transition:opacity .2s;
-  display:flex;align-items:flex-end;justify-content:space-between;
-  padding:10px;
+  position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(to top,rgba(26,22,18,.75) 0%,transparent 100%);
+  padding:28px 8px 8px;
+  display:flex;align-items:flex-end;justify-content:center;
 }}
-.photo-card:hover .overlay{{opacity:1}}
-@media(max-width:768px){{.photo-card .overlay{{opacity:1;background:linear-gradient(to top,rgba(26,22,18,.52) 0%,transparent 44%)}}}}
 .btn-save{{
-  display:inline-flex;align-items:center;gap:5px;
-  background:var(--paper);color:var(--ink);
-  border:none;padding:6px 11px;
-  font-family:'Inter Tight',sans-serif;font-size:12px;font-weight:500;
-  cursor:pointer;text-decoration:none;white-space:nowrap;flex-shrink:0;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  background:rgba(250,246,236,.92);color:var(--ink);
+  border:none;padding:10px;width:100%;
+  font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:600;
+  cursor:pointer;text-decoration:none;white-space:nowrap;
 }}
-.btn-save:active{{background:var(--bg-alt)}}
+.btn-save:active{{background:var(--paper)}}
 
 /* ── Lightbox ── */
 .lightbox{{
@@ -1006,26 +977,26 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 }}
 .lightbox.open{{display:flex}}
 .lightbox-img-wrap{{display:flex;align-items:center;justify-content:center;flex:1;width:100%}}
-.lightbox img{{max-width:95vw;max-height:75vh;object-fit:contain}}
+.lightbox img{{max-width:95vw;max-height:72vh;object-fit:contain}}
 .lightbox-close{{
   position:absolute;top:14px;right:14px;
   background:rgba(250,246,236,.1);border:none;
-  color:var(--paper);width:38px;height:38px;border-radius:50%;
+  color:var(--paper);width:40px;height:40px;border-radius:50%;
   cursor:pointer;display:flex;align-items:center;justify-content:center;
-  font-size:18px;
+  font-size:20px;
 }}
 .lightbox-close:active{{background:rgba(250,246,236,.2)}}
 .lightbox-footer{{
-  display:flex;align-items:center;gap:14px;padding-top:16px;
-  flex-wrap:wrap;justify-content:center;
+  display:flex;align-items:center;flex-direction:column;gap:10px;padding-top:16px;
+  width:100%;max-width:340px;
 }}
-.lb-name{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;color:rgba(250,246,236,.4)}}
+.lb-hint{{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.08em;color:rgba(250,246,236,.3);text-align:center}}
 .btn-lb-save{{
-  display:inline-flex;align-items:center;gap:8px;
+  display:inline-flex;align-items:center;justify-content:center;gap:10px;
   background:var(--gold);color:var(--ink);
-  border:none;padding:11px 24px;
-  font-family:'Inter Tight',sans-serif;font-size:14px;font-weight:500;
-  cursor:pointer;text-decoration:none;
+  border:none;padding:18px 24px;width:100%;
+  font-family:'Inter Tight',sans-serif;font-size:17px;font-weight:600;
+  cursor:pointer;text-decoration:none;letter-spacing:.01em;
 }}
 .btn-lb-save:active{{background:#b8945a}}
 
@@ -1049,16 +1020,8 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 
 <div class="action-bar">
   <span class="action-hint">اضغط على أي صورة للمعاينة والحفظ</span>
-  <button class="btn-save-all" id="btn-all" onclick="saveAll()">
-    حفظ الكل
-  </button>
-</div>
-
-<div class="zip-bar" id="zip-bar">
-  <div class="zip-spinner" id="zip-spinner"></div>
-  <span class="zip-text" id="zip-text">جاري تجهيز الملف...</span>
-  <a class="btn-zip" id="btn-zip" href="{zip_url}" download="قمرة-صورك.zip">
-    ↓ حفظ ZIP
+  <a class="btn-save-all" href="{zip_url}" download="قمرة-صورك.zip">
+    ↓ حفظ الكل ({len(file_ids)})
   </a>
 </div>
 
@@ -1069,8 +1032,9 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   <div class="lightbox-img-wrap"><img id="lb-img" src="" alt=""></div>
   <div class="lightbox-footer">
     <a class="btn-lb-save" id="lb-save" href="#" target="_blank" rel="noopener">
-      ↓ حفظ الصورة الأصلية
+      ↓ حفظ الصورة بجودة HD
     </a>
+    <div class="lb-hint">جودة أصلية · لا يوجد ضغط</div>
   </div>
 </div>
 
@@ -1082,6 +1046,9 @@ const APP_URL = "{APP_URL}";
 
 function thumbUrl(id) {{
   return APP_URL + '/photo/' + id;
+}}
+function lbUrl(id) {{
+  return 'https://drive.google.com/thumbnail?id=' + id + '&sz=w1920';
 }}
 function dlUrl(id) {{
   return 'https://drive.google.com/uc?export=download&id=' + id;
@@ -1106,7 +1073,7 @@ photos.forEach((p, i) => {{
 
 function openLb(i) {{
   const p = photos[i];
-  document.getElementById('lb-img').src = thumbUrl(p.id);
+  document.getElementById('lb-img').src = lbUrl(p.id);
   const s = document.getElementById('lb-save');
   s.href = dlUrl(p.id);
   document.getElementById('lightbox').classList.add('open');
@@ -1119,23 +1086,6 @@ document.getElementById('lightbox').addEventListener('click', e => {{
 }});
 document.addEventListener('keydown', e => {{ if (e.key==='Escape') closeLb(); }});
 
-function saveAll() {{
-  const btn = document.getElementById('btn-all');
-  const bar = document.getElementById('zip-bar');
-  const txt = document.getElementById('zip-text');
-  const spin = document.getElementById('zip-spinner');
-  const zipBtn = document.getElementById('btn-zip');
-  btn.disabled = true;
-  bar.classList.add('open');
-  txt.textContent = 'جاري تجهيز ' + photos.length + ' صورة...';
-  // The zip endpoint is server-side — just activate the download link
-  setTimeout(() => {{
-    spin.style.display = 'none';
-    txt.textContent = 'جاهز — اضغط لحفظ جميع صورك';
-    zipBtn.classList.add('ready');
-    btn.disabled = false;
-  }}, 800);
-}}
 </script>
 </body>
 </html>"""
