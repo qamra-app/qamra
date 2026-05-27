@@ -2162,19 +2162,17 @@ def event_landing(code):
     if not event:
         return "حفل غير موجود", 404
 
-    wa_number  = OWNER_PHONE
-    wa_link    = f"https://wa.me/{wa_number}?text={code.upper()}"
-    drive_url  = event.get("drive_url", "")
-    kiosk_url  = event.get("kiosk_url", "")
-    name       = event["name"]
+    wa_number   = OWNER_PHONE
+    wa_link     = f"https://wa.me/{wa_number}?text={code.upper()}"
+    gallery_url = f"{APP_URL}/gallery/{code.upper()}/all"
+    kiosk_url   = event.get("kiosk_url", "")
+    name        = event["name"]
 
-    cards = ""
-    if drive_url:
-        cards += f"""
-        <a href="{drive_url}" target="_blank" class="card">
+    cards = f"""
+        <a href="{gallery_url}" class="card">
           <div class="icon">🖼️</div>
           <div class="label">شاهد جميع صور الحفل</div>
-          <div class="sub">Google Drive — ألبوم الحفل كاملاً</div>
+          <div class="sub">معرض الحفل كاملاً — جودة أصلية</div>
         </a>"""
 
     cards += f"""
