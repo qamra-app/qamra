@@ -963,7 +963,8 @@ def _notify_new_photos_for_event(event_code: str):
 
             # Send new photos directly on WhatsApp
             send_msg(f"+{phone}",
-                f"📸 مرحباً! وجدنا *{len(new_ids)}* صور جديدة لك من *{event['name']}*! 🎉"
+                f"📸 مرحباً! عندنا أخبار حلوة — وجدنا *{len(new_ids)} صور جديدة* لك من *{event['name']}* 🎉\n"
+                "إليك صورك الجديدة:"
             )
             for fid in new_ids[:10]:
                 send_msg(f"+{phone}", " ", media_url=f"{APP_URL}/photo/{fid}")
@@ -971,7 +972,10 @@ def _notify_new_photos_for_event(event_code: str):
 
             if gallery_link:
                 send_msg(f"+{phone}",
-                    f"🌙 للجودة الأصلية كاملة، افتح معرضك الشخصي من هنا:\n{gallery_link}"
+                    f"💾 هل أعجبتك الصور؟\n"
+                    f"لحفظها بجودتها الأصلية الكاملة — بدون أي ضغط — افتح معرضك الشخصي:\n"
+                    f"{gallery_link}\n\n"
+                    "أو اضغط *«حفظ الكل»* داخل المعرض لتحميل جميع صورك دفعة واحدة 🌙"
                 )
 
             # Update guest registry
