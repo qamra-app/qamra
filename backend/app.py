@@ -776,7 +776,7 @@ def search_and_send(selfie_bytes, sender, event_code):
 
         send_msg(sender, "⏳ جاري تجهيز معرض صورك الخاص، لحظة واحدة... 🖼️")
 
-        gallery_token = create_gallery_token(event_code, file_ids)
+        gallery_token = create_gallery_token(event_code, file_ids, phone=phone_label)
         gallery_link  = f"{APP_URL}/gallery/{event_code}/g/{gallery_token}"
         print(f"[GALLERY] Sending link to {sender}: {gallery_link}", flush=True)
         send_msg(sender,
@@ -808,11 +808,12 @@ import secrets, zipfile
 
 GALLERY_TTL = 7 * 24 * 3600  # 7 days
 
-def create_gallery_token(event_code: str, file_ids: list) -> str:
+def create_gallery_token(event_code: str, file_ids: list, phone: str = "") -> str:
     token = secrets.token_urlsafe(6)[:8]
     payload = json.dumps({
         "event_code": event_code,
         "file_ids":   file_ids,
+        "phone":      phone,
         "created_at": int(time.time()),
         "expires_at": int(time.time()) + GALLERY_TTL,
     }, ensure_ascii=False)
@@ -1163,7 +1164,9 @@ def gallery_zip(event_code, token):
             yield chunk
 
     event = get_event(data["event_code"]) or {}
-    fname = f"قمرة-{event.get('name', event_code)}.zip".replace("/", "-")
+    phone = data.get("phone", "").strip().replace("+", "").replace(" ", "")
+    name_part = event.get("name", event_code)
+    fname = (f"قمرة-{name_part}-{phone}.zip" if phone else f"قمرة-{name_part}.zip").replace("/", "-")
     return Response(
         stream_with_context(generate()),
         mimetype="application/zip",
@@ -1646,7 +1649,7 @@ def match_api():
 
     threading.Thread(target=_build_shortcuts, daemon=True).start()
 
-    gallery_token = create_gallery_token(event_code, file_ids)
+    gallery_token = create_gallery_token(event_code, file_ids, phone=phone)
     gallery_url   = f"{APP_URL}/gallery/{event_code}/g/{gallery_token}"
 
     resp = {"matches": results, "session_id": session_id, "gallery_url": gallery_url}
