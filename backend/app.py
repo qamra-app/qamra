@@ -1905,7 +1905,8 @@ def event_landing_page(code):
 
     gallery_url = f"{APP_URL}/gallery/{code.upper()}/all"
     selfie_url  = f"/event/{code.upper()}/selfie"
-    wa_link     = f"https://wa.me/{OWNER_PHONE}"
+    wa_msg      = requests.utils.quote(f"مرحباً! أريد البحث عن صوري من {event['name']} 📸")
+    wa_link     = f"https://wa.me/{OWNER_PHONE}?text={wa_msg}"
     landing_url = f"{APP_URL}/event/{code.upper()}/landing"
 
     html = f"""<!DOCTYPE html>
@@ -2985,6 +2986,19 @@ def _handle_whatsapp():
         state = "new"
 
     if state == "new":
+        # Deep-link from landing page — skip menu and go straight to selfie
+        if "أريد البحث عن صوري" in body_text:
+            if len(_events) == 1:
+                code  = next(iter(_events))
+                event = _events[code]
+                _set_conv(sender, "awaiting_selfie", event_code=code)
+                return _reply(f"✨ أهلاً بك في *{event['name']}*!\n\nأرسل لي *سيلفي* لوجهك وسأجد لك جميع صورك 🎉📸" + _SELFIE_TIPS)
+            else:
+                all_ev = list(_events.items())
+                _set_conv(sender, "choosing_event")
+                _conv[sender]["today_events"] = [c for c, _ in all_ev]
+                body, btn_labels = _event_picker_body_and_btns(all_ev)
+                return _reply_buttons(body, btn_labels)
         _set_conv(sender, "routing")
         threading.Thread(target=send_buttons, args=(sender, "🌙 أهلاً وسهلاً! كيف أقدر أساعدك؟", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
         return "", 200
