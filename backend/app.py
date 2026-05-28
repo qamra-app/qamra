@@ -1310,6 +1310,9 @@ function lbUrl(id) {{
 function dlUrl(id) {{
   return 'https://drive.google.com/uc?export=download&id=' + id;
 }}
+function viewUrl(id) {{
+  return APP_URL + '/photo/' + id + '/view';
+}}
 
 async function sendToWa() {{
   const btn = document.getElementById('btn-send-wa');
@@ -1341,7 +1344,7 @@ photos.forEach((p, i) => {{
          onload="var s=document.getElementById('sk${{i}}');if(s)s.remove()"
          onerror="var s=document.getElementById('sk${{i}}');if(s)s.style.opacity='.2'">
     <div class="overlay">
-      <a class="btn-save" href="${{dlUrl(p.id)}}" target="_blank" rel="noopener"
+      <a class="btn-save" href="${{viewUrl(p.id)}}" target="_blank" rel="noopener"
          onclick="event.stopPropagation()">↓ حفظ</a>
     </div>`;
   card.addEventListener('click', () => openLb(i));
@@ -1352,7 +1355,7 @@ function openLb(i) {{
   const p = photos[i];
   document.getElementById('lb-img').src = lbUrl(p.id);
   const s = document.getElementById('lb-save');
-  s.href = dlUrl(p.id);
+  s.href = viewUrl(p.id);
   document.getElementById('lightbox').classList.add('open');
 }}
 function closeLb() {{
@@ -1613,6 +1616,7 @@ let loadedIds = {photos_js}.map(p => p.id);
 
 function thumbUrl(id) {{ return APP_URL + '/photo/' + id; }}
 function dlUrl(id) {{ return 'https://drive.google.com/uc?export=download&id=' + id; }}
+function viewUrl(id) {{ return APP_URL + '/photo/' + id + '/view'; }}
 
 const gallery = document.getElementById('gallery');
 
@@ -1630,7 +1634,7 @@ function addPhotos(ids) {{
            onload="var s=document.getElementById('sk${{idx}}');if(s)s.remove()"
            onerror="var s=document.getElementById('sk${{idx}}');if(s)s.style.opacity='.2'">
       <div class="overlay">
-        <a class="btn-save" href="${{dlUrl(id)}}" target="_blank" rel="noopener"
+        <a class="btn-save" href="${{viewUrl(id)}}" target="_blank" rel="noopener"
            onclick="event.stopPropagation()">↓ حفظ</a>
       </div>`;
     card.addEventListener('click', () => openLb(idx));
@@ -1646,7 +1650,7 @@ function openLb(idx) {{
 function updateLb() {{
   const id = loadedIds[currentLbIdx];
   document.getElementById('lb-img').src = thumbUrl(id);
-  document.getElementById('lb-save').href = dlUrl(id);
+  document.getElementById('lb-save').href = viewUrl(id);
   document.getElementById('lb-counter').textContent = (currentLbIdx + 1) + ' / ' + loadedIds.length;
 }}
 function navLb(dir) {{
@@ -2155,6 +2159,50 @@ def serve_photo(file_id):
     except Exception as e:
         print(f"[PHOTO] Error {file_id}: {e}", flush=True)
         return str(e), 500
+
+@app.route("/photo/<file_id>/view", methods=["GET"])
+def photo_view(file_id):
+    if not all(c.isalnum() or c in "-_" for c in file_id):
+        return "invalid id", 400
+    thumb = f"{APP_URL}/photo/{file_id}"
+    dl    = f"https://drive.google.com/uc?export=download&id={file_id}"
+    html  = f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>قمرة — عرض الصورة</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{--bg:#F2EDE3;--paper:#FAF6EC;--ink:#1A1612;--ink-mute:rgba(26,22,18,.50);--ink-faint:rgba(26,22,18,.18);--rule:rgba(26,22,18,.14);--gold:#C9A96E}}
+html,body{{min-height:100vh;background:#1A1612;color:var(--ink);font-family:'Inter Tight',-apple-system,sans-serif;-webkit-font-smoothing:antialiased;direction:rtl;display:flex;flex-direction:column}}
+.topbar{{background:rgba(26,22,18,.7);backdrop-filter:blur(8px);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;border-bottom:1px solid rgba(250,246,236,.08)}}
+.brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:rgba(250,246,236,.45)}}
+.btn-back{{display:inline-flex;align-items:center;gap:6px;background:transparent;color:rgba(250,246,236,.6);border:1px solid rgba(250,246,236,.15);padding:7px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;text-decoration:none;cursor:pointer}}
+.photo-wrap{{flex:1;display:flex;align-items:center;justify-content:center;padding:24px 16px}}
+.photo-wrap img{{max-width:100%;max-height:80vh;object-fit:contain;display:block}}
+.action-bar{{background:rgba(26,22,18,.85);backdrop-filter:blur(8px);padding:16px 20px;display:flex;align-items:center;justify-content:center;gap:12px;border-top:1px solid rgba(250,246,236,.08);position:sticky;bottom:0}}
+.btn-dl{{display:inline-flex;align-items:center;gap:10px;background:var(--gold);color:var(--ink);border:none;padding:14px 32px;font-family:'Inter Tight',sans-serif;font-size:15px;font-weight:600;cursor:pointer;text-decoration:none;letter-spacing:.01em}}
+.btn-dl:active{{opacity:.85}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <button class="btn-back" onclick="history.back()">← رجوع</button>
+  <div class="brand">QAMRA</div>
+</div>
+<div class="photo-wrap">
+  <img src="{thumb}" alt="صورة">
+</div>
+<div class="action-bar">
+  <a class="btn-dl" href="{dl}" target="_blank" rel="noopener">↓ تحميل الصورة بجودتها الأصلية</a>
+</div>
+</body></html>"""
+    return html, 200, {{"Content-Type": "text/html; charset=utf-8"}}
+
 
 @app.route("/folder-status/<session_id>", methods=["GET"])
 def folder_status(session_id):
