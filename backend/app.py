@@ -1508,7 +1508,7 @@ def gallery_all(event_code):
         return "حفل غير موجود", 404
     state    = load_state(event_code.upper())
     file_map = state.get("file_map", {})
-    all_ids  = list(file_map.keys())
+    all_ids  = list(reversed(list(file_map.keys())))
     total    = len(all_ids)
     page     = int(request.args.get("page", 0))
     per_page = 50
