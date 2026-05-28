@@ -1523,15 +1523,13 @@ def gallery_all(event_code):
 html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   font-family:'Inter Tight',-apple-system,sans-serif;
   -webkit-font-smoothing:antialiased;direction:rtl}}
-.header{{background:var(--paper);border-bottom:1px solid var(--rule);padding:28px 20px 22px;text-align:center}}
+.header{{background:var(--paper);border-bottom:1px solid var(--rule);padding:20px 20px 18px;text-align:center;position:relative}}
 .header-brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:10px}}
-.header-event{{font-family:'Instrument Serif',serif;font-size:clamp(22px,6vw,34px);font-weight:400;font-style:italic;color:var(--ink);margin-bottom:6px}}
+.header-event{{font-family:'Inter Tight',-apple-system,sans-serif;font-size:clamp(18px,5vw,28px);font-weight:700;font-style:normal;color:var(--ink);margin-bottom:6px;letter-spacing:-.01em}}
 .header-count{{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-top:4px}}
 .header-count::before,.header-count::after{{content:"";display:block;width:16px;height:1px;background:var(--gold);opacity:.6}}
-.wa-bar{{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--bg-alt);border-bottom:1px solid var(--rule);gap:12px;flex-wrap:wrap}}
-.wa-hint{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;color:var(--ink-mute)}}
-.btn-wa{{display:inline-flex;align-items:center;gap:8px;background:var(--ink);color:var(--bg);border:none;padding:10px 18px;font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;flex-shrink:0}}
-.btn-wa::after{{content:"";display:inline-block;width:10px;height:1px;background:currentColor;margin-right:2px}}
+.btn-back{{display:inline-flex;align-items:center;gap:6px;background:transparent;color:var(--ink-mute);border:1px solid var(--rule);padding:7px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;text-decoration:none;transition:background .15s;margin-bottom:14px}}
+.btn-back:active{{background:var(--bg-alt)}}
 .gallery{{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:3px;padding:3px;background:var(--bg-alt)}}
 @media(max-width:480px){{.gallery{{grid-template-columns:repeat(2,1fr)}}}}
 .photo-card{{position:relative;aspect-ratio:4/3;overflow:hidden;background:var(--bg-alt);cursor:pointer}}
@@ -1572,12 +1570,9 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 <div class="new-banner" id="new-banner" onclick="location.reload()"></div>
 <div class="header">
   <div class="header-brand">QAMRA</div>
+  <a class="btn-back" href="/event/{event_code.upper()}/landing">← رجوع</a>
   <div class="header-event">{event['name']}</div>
   <div class="header-count" id="count-label">{total} صورة</div>
-</div>
-<div class="wa-bar">
-  <span class="wa-hint">ابحث عن صورك الخاصة عبر واتساب</span>
-  <a href="{wa_link}" target="_blank" class="btn-wa">ابحث عن صورتي</a>
 </div>
 <div class="gallery" id="gallery"></div>
 {'<div class="load-more-wrap"><button class="btn-load-more" id="btn-more" onclick="loadMore()">تحميل المزيد</button></div>' if has_more else ''}
