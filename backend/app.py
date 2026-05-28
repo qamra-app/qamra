@@ -1625,6 +1625,7 @@ let currentLbIdx = 0;
 function addPhotos(ids) {{
   ids.forEach((id, i) => {{
     const idx = gallery.children.length;
+    if (idx >= loadedIds.length) loadedIds.push(id);
     const card = document.createElement('div');
     card.className = 'photo-card';
     card.dataset.idx = idx;
