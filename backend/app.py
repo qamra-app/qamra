@@ -1544,10 +1544,9 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 .header-count::before,.header-count::after{{content:"";display:block;width:16px;height:1px;background:var(--gold);opacity:.6}}
 .btn-back{{display:inline-flex;align-items:center;gap:6px;background:transparent;color:var(--ink-mute);border:1px solid var(--rule);padding:7px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;text-decoration:none;transition:background .15s;margin-bottom:14px}}
 .btn-back:active{{background:var(--bg-alt)}}
-.gallery{{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:3px;padding:3px;background:var(--bg-alt)}}
-@media(max-width:480px){{.gallery{{grid-template-columns:repeat(2,1fr)}}}}
-.photo-card{{position:relative;aspect-ratio:4/3;overflow:hidden;background:var(--bg-alt);cursor:pointer}}
-.photo-card img{{width:100%;height:100%;object-fit:contain;background:var(--bg);display:block;transition:transform .3s}}
+.gallery{{display:grid;grid-template-columns:1fr 1fr;gap:3px;padding:3px;background:var(--bg-alt)}}
+.photo-card{{position:relative;aspect-ratio:1/1;overflow:hidden;background:var(--bg-alt);cursor:pointer}}
+.photo-card img{{width:100%;height:100%;object-fit:cover;display:block;transition:transform .3s}}
 .photo-card:active img{{transform:scale(1.04)}}
 .skeleton{{position:absolute;inset:0;background:linear-gradient(90deg,var(--bg-alt) 25%,var(--rule) 50%,var(--bg-alt) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite}}
 @keyframes shimmer{{0%{{background-position:200% 0}}100%{{background-position:-200% 0}}}}
@@ -1560,11 +1559,14 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 .btn-load-more::after{{content:"";display:block;width:14px;height:1px;background:currentColor}}
 .btn-load-more:active{{background:var(--ink-soft)}}
 .btn-load-more:disabled{{opacity:.4;cursor:not-allowed}}
-.lightbox{{display:none;position:fixed;inset:0;background:rgba(26,22,18,.96);z-index:1000;flex-direction:column;align-items:center;justify-content:center;padding:16px}}
+.lightbox{{display:none;position:fixed;inset:0;background:rgba(26,22,18,.97);z-index:1000;flex-direction:column;align-items:center;justify-content:center;padding:16px}}
 .lightbox.open{{display:flex}}
 .lightbox-img-wrap{{display:flex;align-items:center;justify-content:center;flex:1;width:100%}}
-.lightbox img{{max-width:95vw;max-height:75vh;object-fit:contain}}
+.lightbox img{{max-width:95vw;max-height:80vh;object-fit:contain}}
 .lightbox-close{{position:absolute;top:14px;right:14px;background:rgba(250,246,236,.1);border:none;color:var(--paper);width:38px;height:38px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px}}
+.lb-nav{{position:absolute;top:50%;transform:translateY(-50%);background:rgba(250,246,236,.1);border:none;color:var(--paper);width:44px;height:44px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:22px}}
+.lb-nav.prev{{left:10px}}.lb-nav.next{{right:10px}}
+.lb-counter{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.12em;color:rgba(250,246,236,.4);position:absolute;bottom:72px}}
 .lightbox-footer{{display:flex;align-items:center;gap:14px;padding-top:16px}}
 .btn-lb-save{{display:inline-flex;align-items:center;gap:8px;background:var(--gold);color:var(--ink);border:none;padding:11px 24px;font-family:'Inter Tight',sans-serif;font-size:14px;font-weight:500;cursor:pointer;text-decoration:none}}
 .footer{{text-align:center;padding:28px 16px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);border-top:1px solid var(--rule);background:var(--paper)}}
@@ -1592,7 +1594,10 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
 {'<div class="load-more-wrap"><button class="btn-load-more" id="btn-more" onclick="loadMore()">تحميل المزيد</button></div>' if has_more else ''}
 <div class="lightbox" id="lightbox">
   <button class="lightbox-close" onclick="closeLb()">✕</button>
+  <button class="lb-nav prev" onclick="navLb(-1)">‹</button>
+  <button class="lb-nav next" onclick="navLb(1)">›</button>
   <div class="lightbox-img-wrap"><img id="lb-img" src="" alt=""></div>
+  <div class="lb-counter" id="lb-counter"></div>
   <div class="lightbox-footer">
     <a class="btn-lb-save" id="lb-save" href="#" target="_blank" rel="noopener">↓ حفظ الصورة الأصلية</a>
   </div>
@@ -1611,11 +1616,14 @@ function dlUrl(id) {{ return 'https://drive.google.com/uc?export=download&id=' +
 
 const gallery = document.getElementById('gallery');
 
+let currentLbIdx = 0;
+
 function addPhotos(ids) {{
   ids.forEach((id, i) => {{
     const idx = gallery.children.length;
     const card = document.createElement('div');
     card.className = 'photo-card';
+    card.dataset.idx = idx;
     card.innerHTML = `
       <div class="skeleton" id="sk${{idx}}"></div>
       <img src="${{thumbUrl(id)}}" alt="" loading="lazy"
@@ -1625,21 +1633,41 @@ function addPhotos(ids) {{
         <a class="btn-save" href="${{dlUrl(id)}}" target="_blank" rel="noopener"
            onclick="event.stopPropagation()">↓ حفظ</a>
       </div>`;
-    card.addEventListener('click', () => openLb(id));
+    card.addEventListener('click', () => openLb(idx));
     gallery.appendChild(card);
   }});
 }}
 
-function openLb(id) {{
+function openLb(idx) {{
+  currentLbIdx = idx;
+  updateLb();
+  document.getElementById('lightbox').classList.add('open');
+}}
+function updateLb() {{
+  const id = loadedIds[currentLbIdx];
   document.getElementById('lb-img').src = thumbUrl(id);
   document.getElementById('lb-save').href = dlUrl(id);
-  document.getElementById('lightbox').classList.add('open');
+  document.getElementById('lb-counter').textContent = (currentLbIdx + 1) + ' / ' + loadedIds.length;
+}}
+function navLb(dir) {{
+  currentLbIdx = (currentLbIdx + dir + loadedIds.length) % loadedIds.length;
+  updateLb();
 }}
 function closeLb() {{ document.getElementById('lightbox').classList.remove('open'); }}
 document.getElementById('lightbox').addEventListener('click', e => {{
   if (e.target === document.getElementById('lightbox')) closeLb();
 }});
-document.addEventListener('keydown', e => {{ if (e.key==='Escape') closeLb(); }});
+document.addEventListener('keydown', e => {{
+  if (e.key==='Escape') closeLb();
+  if (e.key==='ArrowLeft') navLb(1);
+  if (e.key==='ArrowRight') navLb(-1);
+}});
+let _tx=null;
+document.getElementById('lightbox').addEventListener('touchstart',e=>{{_tx=e.touches[0].clientX;}},{{passive:true}});
+document.getElementById('lightbox').addEventListener('touchend',e=>{{
+  if(_tx===null)return;const dx=e.changedTouches[0].clientX-_tx;
+  if(Math.abs(dx)>40)navLb(dx>0?1:-1);_tx=null;
+}});
 
 async function loadMore() {{
   const btn = document.getElementById('btn-more');
