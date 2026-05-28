@@ -2201,7 +2201,7 @@ html,body{{min-height:100vh;background:#1A1612;color:var(--ink);font-family:'Int
   <a class="btn-dl" href="{dl}" target="_blank" rel="noopener">↓ تحميل الصورة بجودتها الأصلية</a>
 </div>
 </body></html>"""
-    return html, 200, {{"Content-Type": "text/html; charset=utf-8"}}
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 @app.route("/folder-status/<session_id>", methods=["GET"])
