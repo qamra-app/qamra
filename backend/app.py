@@ -565,9 +565,10 @@ def run_index(event_code):
             try:
                 img_bytes = download_file(photo["id"])
                 persisted_ids, n = index_face(img_bytes, photo["id"], collection_id)
+                # Always add to file_map so all photos appear in the full gallery
+                file_map[photo["id"]] = {"name": photo["name"], "link": photo["webViewLink"]}
                 if n > 0:
                     indexed_ids.add(photo["id"])
-                    file_map[photo["id"]] = {"name": photo["name"], "link": photo["webViewLink"]}
                     for pid in persisted_ids:
                         face_map[pid] = photo["id"]
                     new_count += n
