@@ -1344,7 +1344,7 @@ photos.forEach((p, i) => {{
          onload="var s=document.getElementById('sk${{i}}');if(s)s.remove()"
          onerror="var s=document.getElementById('sk${{i}}');if(s)s.style.opacity='.2'">
     <div class="overlay">
-      <a class="btn-save" href="${{viewUrl(p.id)}}" target="_blank" rel="noopener"
+      <a class="btn-save" href="${{dlUrl(p.id)}}" target="_blank" rel="noopener"
          onclick="event.stopPropagation()">↓ حفظ</a>
     </div>`;
   card.addEventListener('click', () => openLb(i));
@@ -1355,7 +1355,7 @@ function openLb(i) {{
   const p = photos[i];
   document.getElementById('lb-img').src = lbUrl(p.id);
   const s = document.getElementById('lb-save');
-  s.href = viewUrl(p.id);
+  s.href = dlUrl(p.id);
   document.getElementById('lightbox').classList.add('open');
 }}
 function closeLb() {{
@@ -1634,7 +1634,7 @@ function addPhotos(ids) {{
            onload="var s=document.getElementById('sk${{idx}}');if(s)s.remove()"
            onerror="var s=document.getElementById('sk${{idx}}');if(s)s.style.opacity='.2'">
       <div class="overlay">
-        <a class="btn-save" href="${{viewUrl(id)}}" target="_blank" rel="noopener"
+        <a class="btn-save" href="${{dlUrl(id)}}" target="_blank" rel="noopener"
            onclick="event.stopPropagation()">↓ حفظ</a>
       </div>`;
     card.addEventListener('click', () => openLb(idx));
@@ -1650,7 +1650,7 @@ function openLb(idx) {{
 function updateLb() {{
   const id = loadedIds[currentLbIdx];
   document.getElementById('lb-img').src = thumbUrl(id);
-  document.getElementById('lb-save').href = viewUrl(id);
+  document.getElementById('lb-save').href = dlUrl(id);
   document.getElementById('lb-counter').textContent = (currentLbIdx + 1) + ' / ' + loadedIds.length;
 }}
 function navLb(dir) {{
