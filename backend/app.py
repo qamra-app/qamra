@@ -450,42 +450,47 @@ def save_jpeg(image_bytes, output_path):
         return False
 
 def list_drive_photos(gdrive_folder_id):
-    """List all images recursively inside gdrive_folder_id (handles camera DCIM subfolders)."""
-    svc = _drive()
-    all_results = []
-    folders_to_scan = [gdrive_folder_id]
+    """List all images recursively inside gdrive_folder_id (handles camera DCIM subfolders).
+    Returns (photos, success) — success=False means a Drive API error occurred."""
+    try:
+        svc = _drive()
+        all_results = []
+        folders_to_scan = [gdrive_folder_id]
 
-    while folders_to_scan:
-        current = folders_to_scan.pop(0)
+        while folders_to_scan:
+            current = folders_to_scan.pop(0)
 
-        # Find subfolders
-        sub_pt = None
-        while True:
-            sub_resp = svc.files().list(
-                q=f"'{current}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
-                fields="nextPageToken, files(id)",
-                pageSize=100, pageToken=sub_pt,
-            ).execute()
-            for f in sub_resp.get("files", []):
-                folders_to_scan.append(f["id"])
-            sub_pt = sub_resp.get("nextPageToken")
-            if not sub_pt:
-                break
+            # Find subfolders
+            sub_pt = None
+            while True:
+                sub_resp = svc.files().list(
+                    q=f"'{current}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                    fields="nextPageToken, files(id)",
+                    pageSize=100, pageToken=sub_pt,
+                ).execute()
+                for f in sub_resp.get("files", []):
+                    folders_to_scan.append(f["id"])
+                sub_pt = sub_resp.get("nextPageToken")
+                if not sub_pt:
+                    break
 
-        # Collect images in current folder
-        pt = None
-        while True:
-            resp = svc.files().list(
-                q=f"'{current}' in parents and mimeType contains 'image/' and trashed=false",
-                fields="nextPageToken, files(id, name, webViewLink)",
-                pageSize=200, pageToken=pt,
-            ).execute()
-            all_results.extend(resp.get("files", []))
-            pt = resp.get("nextPageToken")
-            if not pt:
-                break
+            # Collect images in current folder
+            pt = None
+            while True:
+                resp = svc.files().list(
+                    q=f"'{current}' in parents and mimeType contains 'image/' and trashed=false",
+                    fields="nextPageToken, files(id, name, webViewLink)",
+                    pageSize=200, pageToken=pt,
+                ).execute()
+                all_results.extend(resp.get("files", []))
+                pt = resp.get("nextPageToken")
+                if not pt:
+                    break
 
-    return all_results
+        return all_results, True
+    except Exception as e:
+        print(f"[DRIVE] list_drive_photos error: {e}", flush=True)
+        return [], False
 
 # ── Indexing ──────────────────────────────────────────────────────────────────
 _index_locks = {}
@@ -521,14 +526,15 @@ def run_index(event_code):
             except Exception as e:
                 print(f"[INDEX] VPS clear error (non-fatal): {e}", flush=True)
 
-        photos = list_drive_photos(gdrive_folder_id)
+        photos, drive_ok = list_drive_photos(gdrive_folder_id)
         print(f"[INDEX] {event_code}: {len(photos)} photos, {len(indexed_ids)} indexed", flush=True)
 
         no_face_ids = set(state.get("no_face_ids", []))
 
-        # Remove files deleted from Drive — guard with len(photos)>0 to avoid
-        # wiping everything if the Drive API returns empty due to a transient error
-        if photos:
+        # Remove files deleted from Drive.
+        # Only run if the Drive API call succeeded (drive_ok=True), even if it returned 0 photos,
+        # so a genuinely empty folder correctly clears the gallery.
+        if drive_ok:
             current_drive_ids = {p["id"] for p in photos}
             deleted_indexed   = indexed_ids - current_drive_ids
             deleted_no_face   = no_face_ids - current_drive_ids
