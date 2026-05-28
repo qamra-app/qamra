@@ -1696,6 +1696,207 @@ setInterval(async () => {{
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
+@app.route("/event/<code>/selfie-search", methods=["POST"])
+def event_selfie_search(code):
+    event = get_event(code.upper())
+    if not event:
+        return jsonify({"error": "حفل غير موجود"}), 404
+
+    f = request.files.get("photo")
+    if not f:
+        return jsonify({"error": "لم يتم إرسال صورة"}), 400
+
+    selfie_bytes = f.read()
+
+    face_count = count_faces(selfie_bytes)
+    if face_count > 1:
+        return jsonify({"error": "الصورة تحتوي على أكثر من وجه — أرسل سيلفي لوجهك منفرداً"}), 400
+
+    matches = search_by_selfie(selfie_bytes, event["collection_id"])
+    if not matches:
+        return jsonify({"error": "ما لقينا وجهك — حاول مرة ثانية بسيلفي أوضح"}), 404
+
+    state    = load_state(code.upper())
+    face_map = state.get("face_map", {})
+    seen, file_ids = set(), []
+    for m in matches:
+        fid = face_map.get(m["persistedFaceId"])
+        if fid and fid not in seen:
+            seen.add(fid)
+            file_ids.append(fid)
+
+    if not file_ids:
+        return jsonify({"error": "ما لقينا صورك — حاول مرة ثانية"}), 404
+
+    token        = create_gallery_token(code.upper(), file_ids)
+    gallery_url  = f"{APP_URL}/gallery/{code.upper()}/g/{token}"
+
+    threading.Thread(
+        target=_register_guest,
+        args=(code.upper(), "", selfie_bytes, file_ids, token),
+        daemon=True,
+    ).start()
+
+    return jsonify({"gallery_url": gallery_url, "count": len(file_ids)}), 200
+
+
+@app.route("/event/<code>/selfie", methods=["GET"])
+def event_selfie_page(code):
+    event = get_event(code.upper())
+    if not event:
+        return "حفل غير موجود", 404
+
+    return f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>قمرة — ابحث عن صورتك</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@1&family=Inter+Tight:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#F2EDE3;--paper:#FAF6EC;--ink:#1A1612;
+  --ink-mute:rgba(26,22,18,.50);--ink-faint:rgba(26,22,18,.18);
+  --rule:rgba(26,22,18,.14);--gold:#C9A96E;
+}}
+html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
+  font-family:'Inter Tight',-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;direction:rtl;
+  display:flex;flex-direction:column;align-items:center;
+  padding:28px 20px;}}
+.brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:12px;text-align:center}}
+.event-name{{font-family:'Instrument Serif',serif;font-size:clamp(22px,6vw,32px);font-weight:400;font-style:italic;text-align:center;margin-bottom:24px}}
+.cam-wrap{{
+  width:100%;max-width:380px;
+  position:relative;overflow:hidden;
+  background:#000;aspect-ratio:3/4;
+  margin-bottom:20px;
+}}
+#video{{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)}}
+#canvas{{display:none}}
+.overlay-hint{{
+  position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(to top,rgba(26,22,18,.7),transparent);
+  padding:20px 16px 16px;
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;
+  color:rgba(250,246,236,.7);text-align:center;
+}}
+.btn-capture{{
+  width:100%;max-width:380px;
+  background:var(--ink);color:var(--bg);
+  border:none;padding:18px;
+  font-family:'Inter Tight',sans-serif;font-size:17px;font-weight:600;
+  cursor:pointer;letter-spacing:.01em;
+  transition:background .15s;margin-bottom:12px;
+}}
+.btn-capture:active{{background:#4A413A}}
+.btn-capture:disabled{{opacity:.45;cursor:not-allowed}}
+.btn-back{{
+  width:100%;max-width:380px;
+  background:transparent;color:var(--ink-mute);
+  border:1px solid var(--rule);padding:12px;
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  cursor:pointer;text-decoration:none;display:block;text-align:center;
+}}
+.status{{
+  width:100%;max-width:380px;
+  font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.06em;
+  color:var(--ink-mute);text-align:center;padding:8px 0;min-height:24px;
+}}
+.err{{color:#c0392b}}
+.cam-error{{
+  width:100%;max-width:380px;aspect-ratio:3/4;
+  background:var(--paper);border:1px solid var(--rule);
+  display:none;align-items:center;justify-content:center;
+  flex-direction:column;gap:12px;text-align:center;padding:24px;
+  margin-bottom:20px;
+}}
+.cam-error p{{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-mute);letter-spacing:.06em}}
+</style>
+</head>
+<body>
+<div class="brand">QAMRA</div>
+<div class="event-name">{event['name']}</div>
+
+<div class="cam-wrap" id="cam-wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <div class="overlay-hint">ضع وجهك في المنتصف</div>
+</div>
+<div class="cam-error" id="cam-error">
+  <span style="font-size:36px">📷</span>
+  <p>تعذّر الوصول للكاميرا<br>تأكد من السماح بالوصول وأعد المحاولة</p>
+</div>
+
+<canvas id="canvas"></canvas>
+<button class="btn-capture" id="btn-capture" onclick="capture()">📸 التقط سيلفي وابحث</button>
+<div class="status" id="status"></div>
+<a class="btn-back" href="/event/{code.upper()}/landing">← رجوع</a>
+
+<script>
+const VIDEO   = document.getElementById('video');
+const CANVAS  = document.getElementById('canvas');
+const BTN     = document.getElementById('btn-capture');
+const STATUS  = document.getElementById('status');
+const CAMWRAP = document.getElementById('cam-wrap');
+const CAMERR  = document.getElementById('cam-error');
+
+async function startCamera() {{
+  try {{
+    const stream = await navigator.mediaDevices.getUserMedia({{
+      video: {{ facingMode: 'user', width: {{ ideal: 1280 }}, height: {{ ideal: 960 }} }},
+      audio: false,
+    }});
+    VIDEO.srcObject = stream;
+  }} catch(e) {{
+    CAMWRAP.style.display = 'none';
+    CAMERR.style.display  = 'flex';
+    BTN.disabled = true;
+    STATUS.textContent = 'لا يمكن الوصول للكاميرا';
+    STATUS.className = 'status err';
+  }}
+}}
+
+async function capture() {{
+  BTN.disabled = true;
+  STATUS.textContent  = '⏳ جاري البحث عن صورك...';
+  STATUS.className = 'status';
+
+  CANVAS.width  = VIDEO.videoWidth  || 1280;
+  CANVAS.height = VIDEO.videoHeight || 960;
+  const ctx = CANVAS.getContext('2d');
+  ctx.translate(CANVAS.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(VIDEO, 0, 0);
+
+  CANVAS.toBlob(async blob => {{
+    const fd = new FormData();
+    fd.append('photo', blob, 'selfie.jpg');
+    try {{
+      const r   = await fetch('/event/{code.upper()}/selfie-search', {{ method:'POST', body: fd }});
+      const d   = await r.json();
+      if (r.ok) {{
+        STATUS.textContent = `✅ وجدنا ${{d.count}} صورة! جاري فتح معرضك...`;
+        setTimeout(() => {{ window.location.href = d.gallery_url; }}, 800);
+      }} else {{
+        STATUS.textContent = d.error || 'حصل خطأ، حاول مرة ثانية';
+        STATUS.className = 'status err';
+        BTN.disabled = false;
+      }}
+    }} catch(e) {{
+      STATUS.textContent = 'خطأ في الاتصال، حاول مرة ثانية';
+      STATUS.className = 'status err';
+      BTN.disabled = false;
+    }}
+  }}, 'image/jpeg', 0.92);
+}}
+
+startCamera();
+</script>
+</body></html>""", 200, {{"Content-Type": "text/html; charset=utf-8"}}
+
+
 @app.route("/event/<code>/landing", methods=["GET"])
 def event_landing_page(code):
     event = get_event(code.upper())
@@ -1703,6 +1904,7 @@ def event_landing_page(code):
         return "حفل غير موجود", 404
 
     gallery_url = f"{APP_URL}/gallery/{code.upper()}/all"
+    selfie_url  = f"/event/{code.upper()}/selfie"
     wa_link     = f"https://wa.me/{OWNER_PHONE}"
     landing_url = f"{APP_URL}/event/{code.upper()}/landing"
 
@@ -1742,11 +1944,14 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
 }}
 .card:active{{background:var(--bg-alt)}}
 .card.gold{{background:var(--gold-soft);border-color:rgba(201,169,110,.35)}}
-.card-icon{{font-size:28px;flex-shrink:0;line-height:1}}
+.card-icon{{font-size:32px;flex-shrink:0;line-height:1}}
 .card-body{{flex:1}}
-.card-title{{font-size:16px;font-weight:600;margin-bottom:3px}}
-.card-sub{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;color:var(--ink-mute)}}
+.card-title{{font-size:19px;font-weight:600;margin-bottom:4px}}
+.card-sub{{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.06em;color:var(--ink-mute)}}
 .card-arrow{{font-size:18px;color:var(--ink-mute);flex-shrink:0}}
+.badge{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;margin-bottom:6px}}
+.badge-rec{{background:var(--ink);color:#fff}}
+.badge-new{{color:#25D366;border:1px solid rgba(37,211,102,.4)}}
 .qr-section{{
   background:var(--paper);border:1px solid var(--rule);
   padding:24px 20px;width:100%;text-align:center;
@@ -1773,11 +1978,21 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
       </div>
       <span class="card-arrow">←</span>
     </a>
-    <a href="{wa_link}" target="_blank" class="card">
-      <span class="card-icon">📸</span>
+    <a href="{selfie_url}" class="card">
+      <span class="card-icon">📷</span>
       <div class="card-body">
-        <div class="card-title">ابحث عن صورتك</div>
-        <div class="card-sub">أرسل سيلفي عبر واتساب · ثوانٍ فقط</div>
+        <div class="badge badge-rec">★ الأفضل · موصى به</div>
+        <div class="card-title">ابحث عن صورتك من هنا</div>
+        <div class="card-sub">افتح الكاميرا · التقط سيلفي · شاهد صورك فوراً</div>
+      </div>
+      <span class="card-arrow">←</span>
+    </a>
+    <a href="{wa_link}" target="_blank" class="card">
+      <span class="card-icon">💬</span>
+      <div class="card-body">
+        <div class="badge badge-new">✦ جديد</div>
+        <div class="card-title">ابحث عن صورتك عبر بوت واتساب</div>
+        <div class="card-sub">أرسل سيلفي على واتساب · احصل على رابط معرضك</div>
       </div>
       <span class="card-arrow">←</span>
     </a>
