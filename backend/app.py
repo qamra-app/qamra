@@ -1894,7 +1894,7 @@ async function capture() {{
 
 startCamera();
 </script>
-</body></html>""", 200, {{"Content-Type": "text/html; charset=utf-8"}}
+</body></html>""", 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 @app.route("/event/<code>/landing", methods=["GET"])
@@ -3129,26 +3129,26 @@ def _handle_whatsapp():
             return "", 200
 
     if state == "awaiting_rating":
-        _RATING_MAP = {
-            "😍 ممتاز":         10,
-            "👍 جيد":            7,
-            "🤔 تحتاج تحسين":   4,
-        }
         chosen = body_text.strip()
-        if chosen in _RATING_MAP:
-            rating = _RATING_MAP[chosen]
-            _set_conv(sender, "awaiting_comment", event_code=conv.get("event_code"))
-            _conv[sender]["pending_rating"] = rating
-            threading.Thread(target=send_buttons, args=(
-                sender,
-                f"{chosen}\n\nشكراً على رأيك! 🙏\n\nهل تودّ إضافة تعليق؟",
-                ["✍️ أضف تعليقاً", "⏭️ تخطي"],
-            ), daemon=True).start()
-            return "", 200
-        return _reply_buttons(
-            "كيف كانت تجربتك مع قمرة؟ 🌙",
-            ["😍 ممتاز", "👍 جيد", "🤔 تحتاج تحسين"],
-        )
+        if "ممتاز" in chosen:
+            rating, label = 10, "😍 ممتاز"
+        elif "جيد" in chosen:
+            rating, label = 7, "👍 جيد"
+        elif "تحسين" in chosen:
+            rating, label = 4, "🤔 تحتاج تحسين"
+        else:
+            return _reply_buttons(
+                "كيف كانت تجربتك مع قمرة؟ 🌙",
+                ["😍 ممتاز", "👍 جيد", "🤔 تحتاج تحسين"],
+            )
+        _set_conv(sender, "awaiting_comment", event_code=conv.get("event_code"))
+        _conv[sender]["pending_rating"] = rating
+        threading.Thread(target=send_buttons, args=(
+            sender,
+            f"{label}\n\nشكراً على رأيك! 🙏\n\nهل تودّ إضافة تعليق؟",
+            ["✍️ أضف تعليقاً", "⏭️ تخطي"],
+        ), daemon=True).start()
+        return "", 200
 
     if state == "awaiting_comment":
         event_code = conv.get("event_code", "DEFAULT")
