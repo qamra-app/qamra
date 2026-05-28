@@ -450,19 +450,42 @@ def save_jpeg(image_bytes, output_path):
         return False
 
 def list_drive_photos(gdrive_folder_id):
+    """List all images recursively inside gdrive_folder_id (handles camera DCIM subfolders)."""
     svc = _drive()
-    results, pt = [], None
-    while True:
-        resp = svc.files().list(
-            q=f"'{gdrive_folder_id}' in parents and mimeType contains 'image/' and trashed=false",
-            fields="nextPageToken, files(id, name, webViewLink)",
-            pageSize=200, pageToken=pt,
-        ).execute()
-        results.extend(resp.get("files", []))
-        pt = resp.get("nextPageToken")
-        if not pt:
-            break
-    return results
+    all_results = []
+    folders_to_scan = [gdrive_folder_id]
+
+    while folders_to_scan:
+        current = folders_to_scan.pop(0)
+
+        # Find subfolders
+        sub_pt = None
+        while True:
+            sub_resp = svc.files().list(
+                q=f"'{current}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                fields="nextPageToken, files(id)",
+                pageSize=100, pageToken=sub_pt,
+            ).execute()
+            for f in sub_resp.get("files", []):
+                folders_to_scan.append(f["id"])
+            sub_pt = sub_resp.get("nextPageToken")
+            if not sub_pt:
+                break
+
+        # Collect images in current folder
+        pt = None
+        while True:
+            resp = svc.files().list(
+                q=f"'{current}' in parents and mimeType contains 'image/' and trashed=false",
+                fields="nextPageToken, files(id, name, webViewLink)",
+                pageSize=200, pageToken=pt,
+            ).execute()
+            all_results.extend(resp.get("files", []))
+            pt = resp.get("nextPageToken")
+            if not pt:
+                break
+
+    return all_results
 
 # ── Indexing ──────────────────────────────────────────────────────────────────
 _index_locks = {}
@@ -502,6 +525,26 @@ def run_index(event_code):
         print(f"[INDEX] {event_code}: {len(photos)} photos, {len(indexed_ids)} indexed", flush=True)
 
         no_face_ids = set(state.get("no_face_ids", []))
+
+        # Remove files deleted from Drive — guard with len(photos)>0 to avoid
+        # wiping everything if the Drive API returns empty due to a transient error
+        if photos:
+            current_drive_ids = {p["id"] for p in photos}
+            deleted_indexed   = indexed_ids - current_drive_ids
+            deleted_no_face   = no_face_ids - current_drive_ids
+            deleted_ids       = deleted_indexed | deleted_no_face
+            if deleted_ids:
+                indexed_ids -= deleted_indexed
+                no_face_ids -= deleted_no_face
+                for fid in deleted_ids:
+                    file_map.pop(fid, None)
+                face_map = {k: v for k, v in face_map.items() if v not in deleted_ids}
+                print(f"[INDEX] {event_code}: removed {len(deleted_ids)} deleted files from index", flush=True)
+                threading.Thread(
+                    target=_cleanup_guest_tokens,
+                    args=(event_code, deleted_ids),
+                    daemon=True,
+                ).start()
         new_count = 0
         for i, photo in enumerate(photos):
             if photo["id"] in indexed_ids or photo["id"] in no_face_ids:
@@ -908,6 +951,43 @@ def _register_guest(event_code: str, phone: str, selfie_bytes: bytes, file_ids: 
         print(f"[NOTIFY] Registered guest {phone} for {event_code}", flush=True)
     except Exception as e:
         print(f"[NOTIFY] Registration error: {e}", flush=True)
+
+def _cleanup_guest_tokens(event_code: str, deleted_ids: set):
+    """Remove deleted Drive file IDs from all guest gallery tokens for an event."""
+    try:
+        r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/guest_index_{event_code}", headers=_face_hdrs(), timeout=10)
+        if r.status_code != 200:
+            return
+        index = json.loads(r.json()["value"])
+    except Exception as e:
+        print(f"[CLEANUP] Index load error {event_code}: {e}", flush=True)
+        return
+
+    for phone in index:
+        try:
+            r = _session.get(f"{FACE_SERVICE_URL}/v1/kv/guest_{event_code}_{phone}", headers=_face_hdrs(), timeout=10)
+            if r.status_code != 200:
+                continue
+            guest_data = json.loads(r.json()["value"])
+
+            old_ids = guest_data.get("file_ids", [])
+            new_ids = [fid for fid in old_ids if fid not in deleted_ids]
+            if len(new_ids) == len(old_ids):
+                continue
+
+            guest_data["file_ids"] = new_ids
+            _session.put(
+                f"{FACE_SERVICE_URL}/v1/kv/guest_{event_code}_{phone}",
+                json={"value": json.dumps(guest_data, ensure_ascii=False)},
+                headers=_face_hdrs(), timeout=10,
+            )
+            token = guest_data.get("token", "")
+            if token:
+                _update_gallery_token_file_ids(token, new_ids)
+            print(f"[CLEANUP] {phone}: removed {len(old_ids) - len(new_ids)} deleted photos", flush=True)
+        except Exception as e:
+            print(f"[CLEANUP] Error for {phone}: {e}", flush=True)
+
 
 def _notify_new_photos_for_event(event_code: str):
     try:
@@ -2695,8 +2775,8 @@ def _handle_whatsapp():
         return "", 200
 
     if state == "routing":
-        picked_photos  = body_text in ("1", "١", "📸 ابحث عن صوري") or \
-                         any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل", "ابحث"))
+        picked_photos  = body_text in ("1", "١", "📸 ابحث عن صوري", "🔄 بحث بوجه آخر") or \
+                         any(w in body_text for w in ("صور", "ضيف", "صورة", "حفل", "ابحث", "بحث"))
         picked_inquiry = body_text in ("2", "٢", "💬 استفسار وتواصل") or \
                          any(w in body_text for w in ("استفسار", "سؤال", "تواصل"))
 
@@ -2717,6 +2797,9 @@ def _handle_whatsapp():
         elif picked_inquiry:
             _set_conv(sender, "awaiting_inquiry")
             return _reply("بكل سرور! اكتب استفسارك وسنوصله لفريق الدعم 💬")
+        elif body_text.strip() == "⏹️ انتهيت":
+            _clear_conv(sender)
+            return _reply("نراك في المرة القادمة! 🌙")
         else:
             threading.Thread(target=send_buttons, args=(sender, "من فضلك اختر من القائمة:", ["📸 ابحث عن صوري", "💬 استفسار وتواصل"]), daemon=True).start()
             return "", 200
@@ -2810,8 +2893,8 @@ def _handle_whatsapp():
                     time.sleep(0.8)
                 _set_conv(sender, "awaiting_rating", event_code=event_code_s)
                 send_buttons(sender,
-                    "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*",
-                    ["🔄 بحث بوجه آخر"],
+                    "كيف كانت تجربتك مع قمرة؟ 🌙",
+                    ["😍 ممتاز", "👍 جيد", "🤔 تحتاج تحسين"],
                 )
             threading.Thread(target=_send_all_photos, daemon=True).start()
             return "", 200
@@ -2825,41 +2908,32 @@ def _handle_whatsapp():
             # handle inline below — fall through to awaiting_rating block
         else:
             send_buttons(sender,
-                "كيف تقيّم تجربتك مع قمرة؟ ⭐\nأرسل رقماً من *1* إلى *10*",
-                ["🔄 بحث بوجه آخر"],
+                "كيف كانت تجربتك مع قمرة؟ 🌙",
+                ["😍 ممتاز", "👍 جيد", "🤔 تحتاج تحسين"],
             )
             return "", 200
 
     if state == "awaiting_rating":
-        if body_text.strip() == "🔄 بحث بوجه آخر":
-            _clear_conv(sender)
-            if not _events:
-                return _reply("⚠️ ما فيه حفل مسجل. تواصل مع المنظم.")
-            elif len(_events) == 1:
-                code  = next(iter(_events))
-                event = _events[code]
-                _set_conv(sender, "awaiting_selfie", event_code=code)
-                return _reply(f"📸 أرسل لي سيلفياً جديداً وسأبحث من جديد في *{event['name']}*!" + _SELFIE_TIPS)
-            else:
-                all_ev = list(_events.items())
-                _set_conv(sender, "choosing_event")
-                _conv[sender]["today_events"] = [c for c, _ in all_ev]
-                body, btn_labels = _event_picker_body_and_btns(all_ev)
-                return _reply_buttons(body, btn_labels)
-        try:
-            rating = int(body_text.strip())
-            if 1 <= rating <= 10:
-                _set_conv(sender, "awaiting_comment", event_code=conv.get("event_code"))
-                _conv[sender]["pending_rating"] = rating
-                threading.Thread(target=send_buttons, args=(
-                    sender,
-                    f"{'⭐' * rating}\n\nشكراً على تقييمك! 🙏\n\nهل تودّ إضافة تعليق؟",
-                    ["✍️ أضف تعليقاً", "⏭️ تخطي"],
-                ), daemon=True).start()
-                return "", 200
-        except (ValueError, TypeError):
-            pass
-        return _reply("من فضلك أرسل رقماً من *1* إلى *10* ⭐")
+        _RATING_MAP = {
+            "😍 ممتاز":         10,
+            "👍 جيد":            7,
+            "🤔 تحتاج تحسين":   4,
+        }
+        chosen = body_text.strip()
+        if chosen in _RATING_MAP:
+            rating = _RATING_MAP[chosen]
+            _set_conv(sender, "awaiting_comment", event_code=conv.get("event_code"))
+            _conv[sender]["pending_rating"] = rating
+            threading.Thread(target=send_buttons, args=(
+                sender,
+                f"{chosen}\n\nشكراً على رأيك! 🙏\n\nهل تودّ إضافة تعليق؟",
+                ["✍️ أضف تعليقاً", "⏭️ تخطي"],
+            ), daemon=True).start()
+            return "", 200
+        return _reply_buttons(
+            "كيف كانت تجربتك مع قمرة؟ 🌙",
+            ["😍 ممتاز", "👍 جيد", "🤔 تحتاج تحسين"],
+        )
 
     if state == "awaiting_comment":
         event_code = conv.get("event_code", "DEFAULT")
@@ -2870,8 +2944,12 @@ def _handle_whatsapp():
         if body_text.strip() in ("✍️ أضف تعليقاً", "1", "١"):
             return _reply("اكتب تعليقك وسنحفظه 📝")
         threading.Thread(target=save_rating, args=(event_code, sender, rating, comment), daemon=True).start()
-        _clear_conv(sender)
-        return _reply("✅ تم حفظ تقييمك، شكراً جزيلاً! 🌙\n\nنراك في المرة القادمة 🎉")
+        _set_conv(sender, "routing")
+        send_buttons(sender,
+            "✅ تم حفظ تقييمك، شكراً جزيلاً! 🌙\n\nهل تريد البحث عن وجه آخر؟",
+            ["🔄 بحث بوجه آخر", "⏹️ انتهيت"],
+        )
+        return "", 200
 
     # Fallback
     _clear_conv(sender)
