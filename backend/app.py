@@ -1169,25 +1169,6 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   flex-shrink:0;
 }}
 .btn-save-all:active{{background:var(--ink-soft)}}
-.wa-bar{{
-  padding:10px 16px;
-  background:var(--paper);border-bottom:1px solid var(--rule);
-  display:flex;flex-direction:column;gap:4px;
-}}
-.btn-send-wa{{
-  display:inline-flex;align-items:center;gap:8px;
-  background:var(--gold-soft);color:var(--ink);
-  border:1px solid rgba(201,169,110,.35);padding:10px 18px;
-  font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:500;
-  cursor:pointer;text-decoration:none;white-space:nowrap;
-  transition:background .15s;width:100%;justify-content:center;
-}}
-.btn-send-wa:active{{background:rgba(201,169,110,.25)}}
-.btn-send-wa:disabled{{opacity:.45;cursor:not-allowed}}
-.wa-disclaimer{{
-  font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;
-  color:var(--ink-mute);text-align:center;
-}}
 
 /* ── Gallery grid ── */
 .gallery{{
@@ -1283,13 +1264,6 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   <a class="btn-save-all" href="{zip_url}" download="قمرة-صورك.zip">
     ↓ حفظ الكل ({len(file_ids)})
   </a>
-</div>
-
-<div class="wa-bar">
-  <button class="btn-send-wa" id="btn-send-wa" onclick="sendToWa()">
-    📨 أرسل لي الصور على واتساب
-  </button>
-  <div class="wa-disclaimer">الصور عبر واتساب ستكون بجودة أقل — للجودة الكاملة اضغط "حفظ الكل" ↑</div>
 </div>
 
 <div class="gallery" id="gallery"></div>
@@ -1755,6 +1729,9 @@ def event_selfie_page(code):
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@1&family=Inter+Tight:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+@keyframes spin{{to{{transform:rotate(360deg)}}}}
+@keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.4}}}}
+@keyframes countPop{{0%{{transform:scale(1.6);opacity:0}}40%{{opacity:1}}100%{{transform:scale(1);opacity:1}}}}
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 :root{{
   --bg:#F2EDE3;--paper:#FAF6EC;--ink:#1A1612;
@@ -1776,13 +1753,65 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
 }}
 #video{{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)}}
 #canvas{{display:none}}
-.overlay-hint{{
-  position:absolute;bottom:0;left:0;right:0;
-  background:linear-gradient(to top,rgba(26,22,18,.7),transparent);
-  padding:20px 16px 16px;
-  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;
-  color:rgba(250,246,236,.7);text-align:center;
+
+/* Oval face guide */
+.oval-overlay{{
+  position:absolute;inset:0;pointer-events:none;
 }}
+.oval-hole{{
+  position:absolute;
+  top:50%;left:50%;
+  width:72%;padding-bottom:88%;
+  transform:translate(-50%,-54%);
+  border-radius:50%;
+  box-shadow:0 0 0 200px rgba(0,0,0,0.52);
+  border:2.5px solid rgba(255,255,255,0.55);
+}}
+.oval-hint{{
+  position:absolute;bottom:14px;left:0;right:0;
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;
+  color:rgba(255,255,255,.65);text-align:center;
+}}
+
+/* Countdown */
+.countdown{{
+  position:absolute;inset:0;display:none;
+  align-items:center;justify-content:center;
+  pointer-events:none;
+}}
+.countdown.show{{display:flex}}
+.countdown-num{{
+  font-family:'Instrument Serif',serif;font-size:120px;font-weight:400;
+  color:#fff;text-shadow:0 2px 24px rgba(0,0,0,.6);
+  animation:countPop .55s ease-out forwards;
+}}
+
+/* Loading screen */
+.loading-screen{{
+  display:none;position:fixed;inset:0;z-index:999;
+  background:var(--bg);flex-direction:column;
+  align-items:center;justify-content:center;gap:24px;
+}}
+.loading-screen.show{{display:flex}}
+.loading-spinner{{
+  width:52px;height:52px;border-radius:50%;
+  border:3px solid var(--rule);
+  border-top-color:var(--gold);
+  animation:spin .9s linear infinite;
+}}
+.loading-title{{
+  font-family:'Instrument Serif',serif;font-size:26px;font-weight:400;font-style:italic;
+  color:var(--ink);animation:pulse 1.6s ease-in-out infinite;
+}}
+.loading-sub{{
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-mute);
+}}
+.loading-err{{
+  font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.06em;
+  color:#c0392b;text-align:center;padding:0 24px;display:none;
+}}
+
 .btn-capture{{
   width:100%;max-width:380px;
   background:var(--ink);color:var(--bg);
@@ -1800,12 +1829,6 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
   font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
   cursor:pointer;text-decoration:none;display:block;text-align:center;
 }}
-.status{{
-  width:100%;max-width:380px;
-  font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.06em;
-  color:var(--ink-mute);text-align:center;padding:8px 0;min-height:24px;
-}}
-.err{{color:#c0392b}}
 .cam-error{{
   width:100%;max-width:380px;aspect-ratio:3/4;
   background:var(--paper);border:1px solid var(--rule);
@@ -1822,7 +1845,13 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
 
 <div class="cam-wrap" id="cam-wrap">
   <video id="video" autoplay playsinline muted></video>
-  <div class="overlay-hint">ضع وجهك في المنتصف</div>
+  <div class="oval-overlay">
+    <div class="oval-hole" id="oval"></div>
+    <div class="oval-hint">ضع وجهك داخل الإطار</div>
+  </div>
+  <div class="countdown" id="countdown">
+    <span class="countdown-num" id="countdown-num">3</span>
+  </div>
 </div>
 <div class="cam-error" id="cam-error">
   <span style="font-size:36px">📷</span>
@@ -1830,17 +1859,29 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
 </div>
 
 <canvas id="canvas"></canvas>
-<button class="btn-capture" id="btn-capture" onclick="capture()">📸 التقط سيلفي وابحث</button>
-<div class="status" id="status"></div>
-<a class="btn-back" href="/event/{code.upper()}/landing">← رجوع</a>
+<button class="btn-capture" id="btn-capture" onclick="startCountdown()">📸 التقط سيلفي وابحث</button>
+<a class="btn-back" id="btn-back" href="/event/{code.upper()}/landing">← رجوع</a>
+
+<!-- Full-screen loading -->
+<div class="loading-screen" id="loading">
+  <div class="loading-spinner"></div>
+  <div class="loading-title">جاري البحث عن صورك</div>
+  <div class="loading-sub">ثوانٍ فقط 🌙</div>
+  <div class="loading-err" id="loading-err"></div>
+  <button class="btn-capture" id="btn-retry" style="display:none;margin-top:12px" onclick="retryFromLoading()">حاول مرة ثانية</button>
+</div>
 
 <script>
-const VIDEO   = document.getElementById('video');
-const CANVAS  = document.getElementById('canvas');
-const BTN     = document.getElementById('btn-capture');
-const STATUS  = document.getElementById('status');
-const CAMWRAP = document.getElementById('cam-wrap');
-const CAMERR  = document.getElementById('cam-error');
+const VIDEO    = document.getElementById('video');
+const CANVAS   = document.getElementById('canvas');
+const BTN      = document.getElementById('btn-capture');
+const CAMWRAP  = document.getElementById('cam-wrap');
+const CAMERR   = document.getElementById('cam-error');
+const CDOWN    = document.getElementById('countdown');
+const CDNUM    = document.getElementById('countdown-num');
+const LOADING  = document.getElementById('loading');
+const LERR     = document.getElementById('loading-err');
+const BTNRETRY = document.getElementById('btn-retry');
 
 async function startCamera() {{
   try {{
@@ -1853,16 +1894,33 @@ async function startCamera() {{
     CAMWRAP.style.display = 'none';
     CAMERR.style.display  = 'flex';
     BTN.disabled = true;
-    STATUS.textContent = 'لا يمكن الوصول للكاميرا';
-    STATUS.className = 'status err';
   }}
 }}
 
-async function capture() {{
+function startCountdown() {{
   BTN.disabled = true;
-  STATUS.textContent  = '⏳ جاري البحث عن صورك...';
-  STATUS.className = 'status';
+  document.getElementById('btn-back').style.display = 'none';
+  let n = 3;
+  CDNUM.textContent = n;
+  CDOWN.classList.add('show');
 
+  const tick = () => {{
+    CDNUM.style.animation = 'none';
+    void CDNUM.offsetWidth;
+    CDNUM.style.animation = 'countPop .55s ease-out forwards';
+    CDNUM.textContent = n;
+    if (n === 0) {{
+      CDOWN.classList.remove('show');
+      capture();
+      return;
+    }}
+    n--;
+    setTimeout(tick, 900);
+  }};
+  tick();
+}}
+
+function capture() {{
   CANVAS.width  = VIDEO.videoWidth  || 1280;
   CANVAS.height = VIDEO.videoHeight || 960;
   const ctx = CANVAS.getContext('2d');
@@ -1870,26 +1928,37 @@ async function capture() {{
   ctx.scale(-1, 1);
   ctx.drawImage(VIDEO, 0, 0);
 
+  LOADING.classList.add('show');
+  LERR.style.display  = 'none';
+  BTNRETRY.style.display = 'none';
+
   CANVAS.toBlob(async blob => {{
     const fd = new FormData();
     fd.append('photo', blob, 'selfie.jpg');
     try {{
-      const r   = await fetch('/event/{code.upper()}/selfie-search', {{ method:'POST', body: fd }});
-      const d   = await r.json();
+      const r = await fetch('/event/{code.upper()}/selfie-search', {{ method:'POST', body: fd }});
+      const d = await r.json();
       if (r.ok) {{
-        STATUS.textContent = `✅ وجدنا ${{d.count}} صورة! جاري فتح معرضك...`;
-        setTimeout(() => {{ window.location.href = d.gallery_url; }}, 800);
+        window.location.href = d.gallery_url;
       }} else {{
-        STATUS.textContent = d.error || 'حصل خطأ، حاول مرة ثانية';
-        STATUS.className = 'status err';
-        BTN.disabled = false;
+        showError(d.error || 'حصل خطأ، حاول مرة ثانية');
       }}
     }} catch(e) {{
-      STATUS.textContent = 'خطأ في الاتصال، حاول مرة ثانية';
-      STATUS.className = 'status err';
-      BTN.disabled = false;
+      showError('خطأ في الاتصال — تحقق من الإنترنت وحاول مرة ثانية');
     }}
   }}, 'image/jpeg', 0.92);
+}}
+
+function showError(msg) {{
+  LERR.textContent   = msg;
+  LERR.style.display = 'block';
+  BTNRETRY.style.display = 'block';
+}}
+
+function retryFromLoading() {{
+  LOADING.classList.remove('show');
+  BTN.disabled = false;
+  document.getElementById('btn-back').style.display = 'block';
 }}
 
 startCamera();
