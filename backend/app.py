@@ -1744,7 +1744,7 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
   display:flex;flex-direction:column;align-items:center;
   padding:28px 20px;}}
 .brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:12px;text-align:center}}
-.event-name{{font-family:'Instrument Serif',serif;font-size:clamp(22px,6vw,32px);font-weight:400;font-style:italic;text-align:center;margin-bottom:24px}}
+.event-name{{font-family:'Inter Tight',-apple-system,sans-serif;font-size:clamp(18px,5vw,28px);font-weight:700;font-style:normal;text-align:center;margin-bottom:24px;letter-spacing:-.01em}}
 .cam-wrap{{
   width:100%;max-width:380px;
   position:relative;overflow:hidden;
@@ -2003,7 +2003,7 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
   padding:32px 20px;}}
 .wrap{{width:100%;max-width:420px;display:flex;flex-direction:column;align-items:center;gap:0}}
 .brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:16px}}
-.event-name{{font-family:'Instrument Serif',serif;font-size:clamp(26px,7vw,42px);font-weight:400;font-style:italic;color:var(--ink);text-align:center;margin-bottom:6px;line-height:1.2}}
+.event-name{{font-family:'Inter Tight',-apple-system,sans-serif;font-size:clamp(22px,6vw,34px);font-weight:700;font-style:normal;color:var(--ink);text-align:center;margin-bottom:6px;line-height:1.2;letter-spacing:-.01em}}
 .rule{{width:40px;height:1px;background:var(--gold);margin:20px auto 28px}}
 .cards{{width:100%;display:flex;flex-direction:column;gap:3px;margin-bottom:32px}}
 .card{{
