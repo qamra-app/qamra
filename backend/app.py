@@ -540,6 +540,13 @@ def run_index(event_code):
                     file_map.pop(fid, None)
                 face_map = {k: v for k, v in face_map.items() if v not in deleted_ids}
                 print(f"[INDEX] {event_code}: removed {len(deleted_ids)} deleted files from index", flush=True)
+                # Save immediately so gallery reflects deletion right away,
+                # before the (potentially long) new-photo indexing loop runs
+                state["indexed_ids"] = list(indexed_ids)
+                state["no_face_ids"] = list(no_face_ids)
+                state["file_map"]    = file_map
+                state["face_map"]    = face_map
+                save_state(event_code, state)
                 threading.Thread(
                     target=_cleanup_guest_tokens,
                     args=(event_code, deleted_ids),
