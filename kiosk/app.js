@@ -1,48 +1,24 @@
 /* ═══════════════════════════════════════════════════════════
    QAMRA Kiosk — App Logic
-   Screens: welcome → whatsapp → selfie → processing → results → photo
+   Screens: welcome → selfie → processing → results → photo
 ═══════════════════════════════════════════════════════════ */
 
 const App = (() => {
   const RESET_SEC  = 60;
-  const EVENT_CODE = "DEFAULT";
+  const EVENT_CODE = new URLSearchParams(window.location.search).get("event") || "NAMLAAN";
 
-  const COUNTRIES = [
-    { dial: "+974", flag: "🇶🇦", name: "قطر",      digits: 8 },
-    { dial: "+966", flag: "🇸🇦", name: "السعودية", digits: 9 },
-    { dial: "+971", flag: "🇦🇪", name: "الإمارات", digits: 9 },
-    { dial: "+965", flag: "🇰🇼", name: "الكويت",   digits: 8 },
-    { dial: "+973", flag: "🇧🇭", name: "البحرين",  digits: 8 },
-    { dial: "+968", flag: "🇴🇲", name: "عُمان",    digits: 8 },
-  ];
-
-  let country     = COUNTRIES[0]; // Qatar default
-  let phone       = "";
   let stream      = null;
+  let faceApiReady      = false;
+  let stopFaceLoop      = null;
   let matches     = [];
-  let totalMatches = 0;
   let faceKey     = "";
   let folderUrl   = "";
-  let sessionId   = "";
   let qr          = null;
-  let driveQr     = null;
-  let folderPoll       = null;
-  let resetTimer       = null;
-  let countTimer       = null;
-  let resultsTimer     = null;
-  let resultsCountTimer = null;
-  let history          = [];
-
-  const RESULTS_SEC = 180; // 3 minutes inactivity on results screen
-
-  // ── Auto-capture state ─────────────────────────────────
-  let _detectTimer  = null;
-  let _stillStart   = null;
-  let _prevPixels   = null;
-  let _detectCanvas = null;
-  let _detectCtx    = null;
-  const CAPTURE_MS  = 3000;  // hold still for 3 s
-  const MOTION_THR  = 30;    // avg per-channel pixel diff = "still"
+  let resetTimer    = null;
+  let countTimer    = null;
+  let history       = [];
+  let renderedCount = 0;
+  const PAGE_SIZE   = 20;
 
   // ── Screens ────────────────────────────────────────────
   function show(id) {
@@ -55,15 +31,10 @@ const App = (() => {
     show(id);
   }
 
-  function start() {
-    // Request fullscreen on first user gesture
-    try { document.documentElement.requestFullscreen().catch(() => {}); } catch(_) {}
-    phone   = "";
-    country = COUNTRIES[0];
+  async function start() {
     history = ["screen-welcome"];
-    refreshCountryDisplay();
-    refreshPhoneDisplay();
-    push("screen-whatsapp");
+    push("screen-selfie");
+    await openCamera();
   }
 
   function goBack() {
@@ -76,119 +47,138 @@ const App = (() => {
   function backToResults() {
     clearCountdown();
     show("screen-results");
-    startResultsCountdown();
   }
 
   function reset() {
     clearCountdown();
-    clearResultsCountdown();
     stopCamera();
-    phone     = "";
-    matches      = [];
-    totalMatches = 0;
-    faceKey      = "";
+    matches   = [];
+    faceKey   = "";
     folderUrl = "";
-    sessionId = "";
     history   = [];
-    country   = COUNTRIES[0];
-    if (folderPoll) { clearInterval(folderPoll); folderPoll = null; }
-    if (qr)         { try { qr.clear();      } catch(_) {} qr      = null; }
-    if (driveQr)    { try { driveQr.clear(); } catch(_) {} driveQr = null; }
-    document.getElementById("results-grid").innerHTML  = "";
-    document.getElementById("qr-box").innerHTML        = "";
-    document.getElementById("drive-qr-box").innerHTML  = "";
-    document.getElementById("drive-bar").style.display = "none";
+    if (qr) { try { qr.clear(); } catch(_) {} qr = null; }
+    document.getElementById("results-grid").innerHTML = "";
+    document.getElementById("qr-box").innerHTML       = "";
     show("screen-welcome");
   }
 
-  // ── Country Picker ─────────────────────────────────────
-  function buildCountryList() {
-    const list = document.getElementById("country-list");
-    list.innerHTML = "";
-    COUNTRIES.forEach(c => {
-      const btn = document.createElement("button");
-      btn.className = "country-option" + (c.dial === country.dial ? " selected" : "");
-      btn.innerHTML = `
-        <span class="flag">${c.flag}</span>
-        <span class="info">
-          <span class="name">${c.name}</span>
-          <span class="code">${c.dial}</span>
-        </span>`;
-      btn.addEventListener("click", e => { e.stopPropagation(); selectCountry(c); });
-      list.appendChild(btn);
-    });
-  }
-
-  function openCountryPicker() {
-    buildCountryList();
-    document.getElementById("country-picker").classList.add("open");
-  }
-
-  function closeCountryPicker(e) {
-    if (!e || e.target === document.getElementById("country-picker")) {
-      document.getElementById("country-picker").classList.remove("open");
+  // ── Face Detection ─────────────────────────────────────
+  async function initFaceApi() {
+    if (faceApiReady || !window.faceapi) return;
+    try {
+      await faceapi.nets.tinyFaceDetector.loadFromUri(
+        "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/"
+      );
+      faceApiReady = true;
+    } catch (e) {
+      console.warn("[FACE] model load failed:", e);
     }
   }
 
-  function selectCountry(c) {
-    country = c;
-    phone   = "";
-    refreshCountryDisplay();
-    refreshPhoneDisplay();
-    closeCountryPicker();
+  function startFaceDetection() {
+    if (!faceApiReady || !window.faceapi) return;
+    let active = true;
+    stopFaceLoop = () => { active = false; };
+
+    const video  = document.getElementById("cam");
+    const canvas = document.getElementById("face-canvas");
+    const ctx    = canvas.getContext("2d");
+
+    const loop = async () => {
+      if (!active || !stream || !video.videoWidth) {
+        if (active) setTimeout(loop, 100);
+        return;
+      }
+
+      canvas.width  = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      try {
+        const dets = await faceapi.detectAllFaces(
+          video,
+          new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 })
+        );
+        if (dets.length > 0 && active) {
+          const det = dets.reduce((a, b) => a.score > b.score ? a : b);
+
+          // Map video coords → canvas coords accounting for object-fit:cover.
+          // No manual x-mirror needed — the .camera-inner wrapper has
+          // transform:scaleX(-1) in CSS which flips both video and canvas together.
+          const vdw   = canvas.width;
+          const vdh   = canvas.height;
+          const vw    = video.videoWidth;
+          const vh    = video.videoHeight;
+          const scale = Math.max(vdw / vw, vdh / vh);
+          const cropX = (vw * scale - vdw) / 2;
+          const cropY = (vh * scale - vdh) / 2;
+
+          const b  = det.box;
+          const ex = b.x * scale - cropX;
+          const ey = b.y * scale - cropY;
+          const ew = b.width  * scale;
+          const eh = b.height * scale;
+
+          const lw = Math.max(2, vdw * 0.003);
+          const corner = Math.min(ew, eh) * 0.18;
+
+          ctx.strokeStyle = "#4ade80";
+          ctx.lineWidth   = lw;
+          ctx.shadowColor = "rgba(0,0,0,0.6)";
+          ctx.shadowBlur  = 6;
+
+          // Draw corner brackets
+          const cx = ex, cy = ey;
+          ctx.beginPath();
+          // top-left
+          ctx.moveTo(cx + corner, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + corner);
+          // top-right
+          ctx.moveTo(cx + ew - corner, cy); ctx.lineTo(cx + ew, cy); ctx.lineTo(cx + ew, cy + corner);
+          // bottom-left
+          ctx.moveTo(cx, cy + eh - corner); ctx.lineTo(cx, cy + eh); ctx.lineTo(cx + corner, cy + eh);
+          // bottom-right
+          ctx.moveTo(cx + ew - corner, cy + eh); ctx.lineTo(cx + ew, cy + eh); ctx.lineTo(cx + ew, cy + eh - corner);
+          ctx.stroke();
+        }
+      } catch (_) {}
+
+      if (active) setTimeout(loop, 150);
+    };
+
+    loop();
   }
 
-  function refreshCountryDisplay() {
-    document.getElementById("selected-flag").textContent = country.flag;
-    document.getElementById("selected-dial").textContent = country.dial;
-  }
-
-  // ── Phone Numpad ───────────────────────────────────────
-  function digit(d) {
-    if (phone.length >= country.digits) return;
-    phone += d;
-    refreshPhoneDisplay();
-  }
-
-  function del() {
-    phone = phone.slice(0, -1);
-    refreshPhoneDisplay();
-  }
-
-  function refreshPhoneDisplay() {
-    document.getElementById("phone-digits").textContent = phone.padEnd(country.digits, "_");
-    document.getElementById("btn-ok").disabled          = phone.length < country.digits;
-  }
-
-  async function confirmPhone() {
-    if (phone.length < country.digits) return;
-    await _goToSelfie();
-  }
-
-  async function skipPhone() {
-    phone = "";
-    await _goToSelfie();
-  }
-
-  async function _goToSelfie() {
-    push("screen-selfie");
-    await new Promise(r => requestAnimationFrame(r));
-    await openCamera();
+  function stopFaceDetection() {
+    if (stopFaceLoop) { stopFaceLoop(); stopFaceLoop = null; }
+    const canvas = document.getElementById("face-canvas");
+    if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   }
 
   // ── Camera ─────────────────────────────────────────────
   async function openCamera() {
-    const video = document.getElementById("cam");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("المتصفح لا يدعم الكاميرا. جرّب Chrome.");
+      return;
+    }
+
+    /*
+     * Chrome/Android black screen fix:
+     * - Do NOT request square (320x320) constraints — Android cameras don't
+     *   support square capture; Chrome returns a black stream silently.
+     * - Do NOT use exact facingMode — fall through to simpler constraints.
+     * - Let the browser pick its native resolution; we scale in CSS/canvas.
+     */
     const strategies = [
-      { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 1280 } },
-      { width: { ideal: 1280 }, height: { ideal: 1280 } },
+      { facingMode: { ideal: "user" } },
+      { facingMode: "user" },
+      {},
       true,
     ];
 
     let lastError = null;
-    for (const constraint of strategies) {
+    for (const videoConstraint of strategies) {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: constraint, audio: false });
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraint, audio: false });
         break;
       } catch (e) {
         lastError = e;
@@ -197,280 +187,231 @@ const App = (() => {
 
     if (!stream) {
       console.error("[CAM]", lastError);
-      alert("تعذّر تشغيل الكاميرا. تأكد من منح الصلاحيات في المتصفح.");
+      alert("تعذّر تشغيل الكاميرا: " + (lastError?.message || "خطأ غير معروف") + "\nتأكد من منح صلاحية الكاميرا.");
       return;
     }
 
-    video.srcObject = stream;
-    // Best-effort: tell camera to auto-expose continuously
+    const video = document.getElementById("cam");
+    video.srcObject = null;
+    video.src = "";
+    video.load(); // reset element so Chromium accepts the new srcObject
+
+    // Older Chromium (some Fully Kiosk versions) didn't support srcObject —
+    // fall back to the deprecated createObjectURL if srcObject assignment fails.
     try {
-      const track = stream.getVideoTracks()[0];
-      await track.applyConstraints({ advanced: [{ exposureMode: 'continuous' }] });
-    } catch (_) { /* unsupported on this device — ignore */ }
-    // Chrome requires metadata loaded before play() — otherwise black screen
-    await new Promise(resolve => {
-      if (video.readyState >= 2) { resolve(); return; }
-      video.onloadedmetadata = resolve;
-    });
-    try {
-      await video.play();
-    } catch (e) {
-      console.error("[CAM play]", e);
+      video.srcObject = stream;
+    } catch (_) {
+      video.src = URL.createObjectURL(stream);
     }
-    // Give camera 1 s to settle before starting auto-capture
-    setTimeout(startAutoCapture, 1000);
+
+    // Call play() immediately — Chrome on Android sometimes never fires
+    // onloadedmetadata if play() hasn't been attempted first.
+    // Also start face detection in play().then() as a fallback for Fully Kiosk
+    // Browser builds where onloadedmetadata never fires.
+    let faceStarted = false;
+    video.play().then(() => {
+      if (!faceStarted) { faceStarted = true; startFaceDetection(); }
+    }).catch(() => {});
+    video.onloadedmetadata = () => {
+      video.play().catch(e => console.error("[CAM play]", e));
+      if (!faceStarted) { faceStarted = true; startFaceDetection(); }
+    };
   }
 
   function stopCamera() {
-    stopAutoCapture();
+    stopFaceDetection();
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     const cam = document.getElementById("cam");
-    if (cam) cam.srcObject = null;
-  }
-
-  // ── Auto-capture ───────────────────────────────────────
-  function startAutoCapture() {
-    if (!stream) return;
-    if (!_detectCanvas) {
-      _detectCanvas = document.createElement('canvas');
-      _detectCanvas.width  = 80;
-      _detectCanvas.height = 80;
-      _detectCtx = _detectCanvas.getContext('2d', { willReadFrequently: true });
+    if (cam) {
+      cam.srcObject = null;
+      cam.src = "";   // also clear createObjectURL fallback if it was used
+      cam.load();     // force browser to release the media resource
     }
-    _stillStart  = null;
-    _prevPixels  = null;
-    _scheduleDetect();
-  }
-
-  function stopAutoCapture() {
-    if (_detectTimer) { clearTimeout(_detectTimer); _detectTimer = null; }
-    _stillStart = null;
-    _prevPixels = null;
-    const oval      = document.getElementById('face-oval');
-    const countdown = document.getElementById('cam-countdown');
-    const hint      = document.getElementById('cam-hint');
-    if (oval)      oval.classList.remove('locking');
-    if (countdown) countdown.textContent = '';
-    if (hint)      hint.textContent = 'ثبّت وجهك داخل الإطار';
-  }
-
-  function _scheduleDetect() {
-    _detectTimer = setTimeout(_detect, 300);
-  }
-
-  function _detect() {
-    const video = document.getElementById('cam');
-    if (!video || !stream) return;
-
-    // Sample the oval region (center 50% width, 80% height of frame)
-    const sx = video.videoWidth  * 0.25;
-    const sy = video.videoHeight * 0.10;
-    const sw = video.videoWidth  * 0.50;
-    const sh = video.videoHeight * 0.80;
-    _detectCtx.drawImage(video, sx, sy, sw, sh, 0, 0, 80, 80);
-    const pixels = _detectCtx.getImageData(0, 0, 80, 80).data;
-
-    let isStill = false;
-    if (_prevPixels) {
-      let diff = 0;
-      for (let i = 0; i < pixels.length; i += 4) {
-        diff += Math.abs(pixels[i]   - _prevPixels[i])
-              + Math.abs(pixels[i+1] - _prevPixels[i+1])
-              + Math.abs(pixels[i+2] - _prevPixels[i+2]);
-      }
-      isStill = (diff / (80 * 80 * 3)) < MOTION_THR;
-    }
-    _prevPixels = new Uint8ClampedArray(pixels);
-
-    const oval      = document.getElementById('face-oval');
-    const countdown = document.getElementById('cam-countdown');
-    const hint      = document.getElementById('cam-hint');
-
-    if (isStill) {
-      if (!_stillStart) _stillStart = Date.now();
-      const elapsed   = Date.now() - _stillStart;
-      const remaining = Math.ceil((CAPTURE_MS - elapsed) / 1000);
-      if (oval)      oval.classList.add('locking');
-      if (countdown) countdown.textContent = remaining > 0 ? remaining : '';
-      if (hint)      hint.textContent = '';
-      if (elapsed >= CAPTURE_MS) {
-        stopAutoCapture();
-        snap();
-        return;
-      }
-    } else {
-      _stillStart = null;
-      if (oval)      oval.classList.remove('locking');
-      if (countdown) countdown.textContent = '';
-      if (hint)      hint.textContent = 'ثبّت وجهك داخل الإطار';
-    }
-
-    _scheduleDetect();
-  }
-
-  function retryCamera() {
-    show("screen-selfie");
-    openCamera();
   }
 
   function snap() {
     const video  = document.getElementById("cam");
     const canvas = document.getElementById("snap-canvas");
-    canvas.width  = video.videoWidth  || 640;
-    canvas.height = video.videoHeight || 640;
+    const MAX = 320;
+    const vw  = video.videoWidth  || 320;
+    const vh  = video.videoHeight || 320;
+    const scale = Math.min(MAX / vw, MAX / vh, 1);
+    canvas.width  = Math.round(vw * scale);
+    canvas.height = Math.round(vh * scale);
     const ctx = canvas.getContext("2d");
     ctx.translate(canvas.width, 0);
     ctx.scale(-1, 1);
-    ctx.drawImage(video, 0, 0);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     stopCamera();
     push("screen-processing");
-    canvas.toBlob(blob => search(blob), "image/jpeg", 0.92);
+    canvas.toBlob(blob => search(blob), "image/jpeg", 0.55);
   }
 
   // ── Face Search ────────────────────────────────────────
   async function search(blob) {
-    try {
-      const form = new FormData();
-      form.append("photo", blob, "selfie.jpg");
-      form.append("event_code", EVENT_CODE);
-      const res  = await fetch("/api/match", { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) {
-        // 503 = not indexed yet, 404 = no event — show empty results instead of crashing
-        totalMatches = 0;
-        matches   = [];
-        faceKey   = data.face_path || "";
-        folderUrl = "";
-        sessionId = "";
+    const dbgEl = document.getElementById("debug-status");
+    const MAX_ATTEMPTS = 3;
+
+    let ticker = null;
+    function startTicker() {
+      const start = Date.now();
+      const msgs = [
+        "جاري اكتشاف وجهك...",
+        "جاري المطابقة مع الصور...",
+        "يرجى الانتظار قليلاً...",
+        "تقريباً جاهز...",
+      ];
+      let i = 0;
+      ticker = setInterval(() => {
+        const sec = Math.round((Date.now() - start) / 1000);
+        const hint = document.getElementById("processing-hint");
+        if (hint) hint.textContent = msgs[Math.min(i++, msgs.length - 1)];
+        if (dbgEl) dbgEl.textContent = `${sec} ثانية`;
+      }, 3000);
+    }
+    function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        if (!blob) throw new Error("no image captured");
+        const form = new FormData();
+        form.append("photo", blob, "selfie.jpg");
+        form.append("phone", "");
+        form.append("event_code", EVENT_CODE);
+        const ctrl  = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 90000);
+        startTicker();
+        let res;
+        try {
+          res = await fetch("/api/match", { method: "POST", body: form, signal: ctrl.signal });
+        } finally {
+          clearTimeout(timer);
+          stopTicker();
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data  = await res.json();
+        matches     = data.matches    || [];
+        faceKey     = data.face_path  || "";
+        folderUrl   = "";
+        logGuest().catch(() => {});
         renderResults();
+        if (data.session_id) pollFolder(data.session_id);
         return;
+      } catch (e) {
+        stopTicker();
+        console.error(`[SEARCH] attempt ${attempt}`, e);
+        if (attempt < MAX_ATTEMPTS) {
+          if (dbgEl) dbgEl.textContent = `محاولة ${attempt + 1}...`;
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
+        alert("حدث خطأ في الاتصال. سنعود للكاميرا — حاول مرة ثانية.");
+        await openCamera();
+        show("screen-selfie");
       }
-      totalMatches = (data.matches || []).length;
-      matches   = (data.matches || []).slice(0, 21);
-      faceKey   = data.face_path || "";
-      folderUrl = data.gallery_url || data.folder_url || "";
-      sessionId = data.gallery_url ? "" : (data.session_id || "");
-      await logGuest();
-      renderResults();
-    } catch (e) {
-      console.error("[SEARCH]", e);
-      alert("حدث خطأ في الاتصال. سنعود للكاميرا — حاول مرة ثانية.");
-      await openCamera();
-      show("screen-selfie");
     }
   }
 
+  // ── Folder polling ─────────────────────────────────────
+  async function pollFolder(sessionId) {
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const res  = await fetch(`/api/folder-status/${sessionId}`);
+        const data = await res.json();
+        if (data.status === "ready" && data.folder_url) {
+          folderUrl = data.folder_url;
+          renderFolderQR();
+          return;
+        }
+        if (data.status === "not_found") return;
+      } catch (_) {}
+    }
+  }
+
+  function renderFolderQR() {
+    const qrBox = document.getElementById("results-qr-box");
+    if (!qrBox || !folderUrl) return;
+    qrBox.innerHTML = "";
+    if (qr) { try { qr.clear(); } catch(_) {} }
+    const size = Math.min(Math.round(window.innerWidth * 0.28), 180);
+    qr = new QRCode(qrBox, {
+      text:         folderUrl,
+      width:        size,
+      height:       size,
+      colorDark:    "#1A1612",
+      colorLight:   "#FAF6EC",
+      correctLevel: QRCode.CorrectLevel.M,
+    });
+  }
+
   // ── Results ────────────────────────────────────────────
+  function makeCard(m, i) {
+    const card = document.createElement("div");
+    card.className = "photo-card";
+    card.innerHTML = `<img src="${m.url}" loading="lazy" alt="صورة ${i + 1}" onerror="this.style.opacity='0.3'"><div class="conf-pill">100%</div>`;
+    card.addEventListener("click", () => showPhoto(m));
+    const pill   = card.querySelector(".conf-pill");
+    const target = Math.round(m.confidence);
+    let current  = 100;
+    setTimeout(() => {
+      const step = setInterval(() => {
+        current--;
+        pill.textContent = current + "%";
+        if (current <= target) clearInterval(step);
+      }, 18);
+    }, i * 60);
+    return card;
+  }
+
+  function renderMore() {
+    const grid    = document.getElementById("results-grid");
+    const moreBtn = document.getElementById("load-more-btn");
+    const batch   = matches.slice(renderedCount, renderedCount + PAGE_SIZE);
+    batch.forEach((m, j) => grid.insertBefore(makeCard(m, renderedCount + j), moreBtn));
+    renderedCount += batch.length;
+    if (renderedCount >= matches.length) {
+      if (moreBtn) moreBtn.style.display = "none";
+    } else {
+      if (moreBtn) moreBtn.textContent = `تحميل المزيد (${matches.length - renderedCount} صورة متبقية)`;
+    }
+  }
+
   function renderResults() {
     const grid  = document.getElementById("results-grid");
     const label = document.getElementById("results-label");
+    const qrBox = document.getElementById("results-qr-box");
     grid.innerHTML = "";
+    renderedCount  = 0;
 
     if (matches.length === 0) {
       label.textContent = "لم نجد صورك";
+      if (qrBox) qrBox.style.display = "none";
       grid.innerHTML = `
         <div class="no-results">
           <span class="nr-icon">😕</span>
           <p>ما لقينا صورك هذي المرة</p>
           <small>تأكد أن السيلفي واضح وحاول مرة ثانية</small>
-          <button class="btn-retry" onclick="App.retryCamera()">📸 حاول مرة ثانية</button>
         </div>`;
     } else {
-      label.textContent = totalMatches > 21
-        ? `وجدنا الكثير من صورك 🎉`
-        : `وجدنا ${matches.length} صورة`;
-      matches.forEach((m, i) => {
-        const card = document.createElement("div");
-        card.className = "photo-card";
-        card.innerHTML = `
-          <img src="${m.url}" loading="lazy" alt="صورة ${i + 1}"
-               onerror="this.style.opacity='0.3'">
-          <div class="conf-pill">100%</div>`;
-        card.addEventListener("click", () => showPhoto(m));
-        grid.appendChild(card);
+      label.textContent = `وجدنا ${matches.length} صورة`;
+      if (qrBox) qrBox.innerHTML = "";
 
-        // Animate confidence from 100% down to actual value
-        const pill   = card.querySelector(".conf-pill");
-        const target = Math.round(m.confidence);
-        let current  = 100;
-        const delay  = i * 120;
-        setTimeout(() => {
-          const step = setInterval(() => {
-            current--;
-            pill.textContent = current + "%";
-            if (current <= target) clearInterval(step);
-          }, 18);
-        }, delay);
-      });
-    }
+      const moreBtn = document.createElement("button");
+      moreBtn.id        = "load-more-btn";
+      moreBtn.className = "btn-load-more";
+      moreBtn.style.display = "none";
+      moreBtn.addEventListener("click", renderMore);
+      grid.appendChild(moreBtn);
 
-    // Drive QR — show instantly if folder_url returned, else poll session_id
-    if (folderPoll) { clearInterval(folderPoll); folderPoll = null; }
-    const driveBar = document.getElementById("drive-bar");
-    const driveBox = document.getElementById("drive-qr-box");
-    driveBox.innerHTML = "";
-    if (driveQr) { try { driveQr.clear(); } catch(_) {} driveQr = null; }
-
-    const driveTitle = driveBar.querySelector(".drive-bar-title");
-    const driveSub   = driveBar.querySelector(".drive-bar-sub");
-
-    function showDriveLoading() {
-      driveBox.innerHTML = '<div class="drive-qr-skeleton"></div>';
-      driveTitle.textContent = "جاري تجهيز معرضك...";
-      driveSub.textContent   = "سيظهر رمز QR خلال ثوانٍ ✨";
-      driveBar.style.display = "flex";
-    }
-
-    function renderDriveQr(url) {
-      driveBox.innerHTML = "";
-      if (driveQr) { try { driveQr.clear(); } catch(_) {} driveQr = null; }
-      driveQr = new QRCode(driveBox, {
-        text:         url,
-        width:        180,
-        height:       180,
-        colorDark:    "#1A1612",
-        colorLight:   "#FAF6EC",
-        correctLevel: QRCode.CorrectLevel.M,
-      });
-      driveTitle.textContent = "امسح لفتح معرض صورك";
-      driveSub.textContent   = "قمرة · حفظ بجودة أصلية · صورك فقط";
-      driveBar.classList.add("drive-bar-ready");
-      driveBar.style.display = "flex";
-    }
-
-    if (folderUrl && matches.length > 0) {
-      renderDriveQr(folderUrl);
-    } else if (sessionId && matches.length > 0) {
-      showDriveLoading();
-      let attempts = 0;
-      folderPoll = setInterval(async () => {
-        attempts++;
-        try {
-          const r = await fetch(`/api/folder-status/${sessionId}`);
-          const d = await r.json();
-          if (d.status === "ready" && d.folder_url) {
-            clearInterval(folderPoll); folderPoll = null;
-            folderUrl = d.folder_url;
-            renderDriveQr(folderUrl);
-          } else if (d.status === "failed" || d.status === "not_found" || attempts > 50) {
-            clearInterval(folderPoll); folderPoll = null;
-            driveBar.style.display = "none";
-          }
-        } catch (_) {
-          if (attempts > 50) { clearInterval(folderPoll); folderPoll = null; driveBar.style.display = "none"; }
-        }
-      }, 1000);
-    } else {
-      driveBar.style.display = "none";
+      renderMore();
     }
 
     push("screen-results");
-    startResultsCountdown();
   }
 
   // ── Photo Detail + QR ──────────────────────────────────
   function showPhoto(match) {
-    clearResultsCountdown();
     document.getElementById("full-photo").src = match.url;
 
     const dlBtn = document.getElementById("dl-btn");
@@ -526,53 +467,6 @@ const App = (() => {
     if (bar) { bar.style.transition = "none"; bar.style.width = "100%"; }
   }
 
-  // ── Results inactivity countdown ───────────────────────
-  function startResultsCountdown() {
-    clearResultsCountdown();
-    let remaining = RESULTS_SEC;
-    _updateResultsBar(remaining);
-
-    const bar = document.getElementById("results-bar");
-    if (bar) {
-      bar.style.transition = "none";
-      bar.style.width      = "100%";
-      requestAnimationFrame(() => {
-        bar.style.transition = `width ${RESULTS_SEC}s linear`;
-        bar.style.width      = "0%";
-      });
-    }
-
-    resultsCountTimer = setInterval(() => {
-      remaining--;
-      _updateResultsBar(remaining);
-      if (remaining <= 0) reset();
-    }, 1000);
-
-    resultsTimer = setTimeout(reset, RESULTS_SEC * 1000 + 200);
-  }
-
-  function clearResultsCountdown() {
-    clearInterval(resultsCountTimer);
-    clearTimeout(resultsTimer);
-    resultsCountTimer = resultsTimer = null;
-    const bar = document.getElementById("results-bar");
-    if (bar) { bar.style.transition = "none"; bar.style.width = "100%"; }
-  }
-
-  function _updateResultsBar(remaining) {
-    const el = document.getElementById("results-countdown");
-    if (!el) return;
-    const m = Math.floor(remaining / 60);
-    const s = remaining % 60;
-    el.textContent = `${m}:${String(s).padStart(2, "0")}`;
-  }
-
-  function _resetResultsInactivity() {
-    if (document.getElementById("screen-results").classList.contains("active")) {
-      startResultsCountdown();
-    }
-  }
-
   // ── Guest Logging ──────────────────────────────────────
   async function logGuest() {
     try {
@@ -580,7 +474,7 @@ const App = (() => {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
-          whatsapp:  country.dial + phone,
+          whatsapp:  "",
           photos:    matches.map(m => ({ url: m.url, confidence: m.confidence })),
           face_path: faceKey,
         }),
@@ -588,10 +482,9 @@ const App = (() => {
     } catch (_) { /* non-critical */ }
   }
 
-  // Reset results inactivity timer on any interaction with the results screen
-  document.getElementById("screen-results")
-    .addEventListener("pointerdown", _resetResultsInactivity);
+  // preload face model while user is on welcome screen
+  setTimeout(() => initFaceApi().catch(() => {}), 500);
 
   // ── Public API ─────────────────────────────────────────
-  return { start, goBack, backToResults, reset, digit, del, confirmPhone, skipPhone, snap, openCountryPicker, closeCountryPicker, retryCamera };
+  return { start, goBack, backToResults, reset, snap };
 })();

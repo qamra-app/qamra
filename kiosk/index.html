@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -23,46 +23,7 @@
     <div class="powered">Powered by QAMRA 🌙</div>
   </div>
 
-  <!-- ══ Screen 2: WhatsApp Number ═════════════════════════════════ -->
-  <div id="screen-whatsapp" class="screen">
-    <div class="screen-header">
-      <button class="btn-back" onclick="App.goBack()">
-        <span>←</span> رجوع
-      </button>
-      <span class="header-title">رقم واتساب</span>
-      <button class="btn-skip" onclick="App.skipPhone()">تخطي ←</button>
-    </div>
-    <div class="screen-content">
-      <div class="phone-panel">
-        <div class="section-label">أدخل رقم واتساب</div>
-        <p class="hint">سنحفظ رقمك لإرسال صورك لاحقاً</p>
-        <div class="phone-display">
-          <button class="country-code-btn" onclick="App.openCountryPicker()">
-            <span id="selected-flag" class="country-flag">🇶🇦</span>
-            <span id="selected-dial" class="country-dial">+974</span>
-            <span class="country-chevron">▾</span>
-          </button>
-          <span id="phone-digits" class="phone-digits">________</span>
-        </div>
-      </div>
-      <div class="numpad">
-        <button class="num-btn" onclick="App.digit('1')">1</button>
-        <button class="num-btn" onclick="App.digit('2')">2</button>
-        <button class="num-btn" onclick="App.digit('3')">3</button>
-        <button class="num-btn" onclick="App.digit('4')">4</button>
-        <button class="num-btn" onclick="App.digit('5')">5</button>
-        <button class="num-btn" onclick="App.digit('6')">6</button>
-        <button class="num-btn" onclick="App.digit('7')">7</button>
-        <button class="num-btn" onclick="App.digit('8')">8</button>
-        <button class="num-btn" onclick="App.digit('9')">9</button>
-        <button class="num-btn num-del" onclick="App.del()">⌫</button>
-        <button class="num-btn" onclick="App.digit('0')">0</button>
-        <button class="num-btn num-ok" id="btn-ok" onclick="App.confirmPhone()" disabled>✓</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══ Screen 3: Selfie ══════════════════════════════════════════ -->
+  <!-- ══ Screen 2: Selfie ══════════════════════════════════════════ -->
   <div id="screen-selfie" class="screen">
     <div class="screen-header">
       <button class="btn-back" onclick="App.goBack()">
@@ -72,16 +33,16 @@
       <div style="width:160px"></div>
     </div>
     <div class="camera-wrap">
-      <video id="cam" autoplay playsinline muted></video>
-      <div class="face-oval" id="face-oval"></div>
-      <div class="cam-countdown" id="cam-countdown"></div>
-      <p class="cam-hint" id="cam-hint">ثبّت وجهك داخل الإطار</p>
+      <div class="camera-inner">
+        <video id="cam" autoplay playsinline muted></video>
+        <canvas id="face-canvas"></canvas>
+      </div>
+      <p class="cam-hint">انظر إلى الكاميرا مباشرةً 📸</p>
     </div>
     <div class="capture-area">
       <button class="btn-capture" onclick="App.snap()">
         <div class="capture-inner"></div>
       </button>
-      <p class="capture-hint">أو اضغط للتصوير يدوياً</p>
     </div>
   </div>
 
@@ -93,7 +54,8 @@
         <img src="assets/logo.png" alt="" class="spinner-logo" onerror="this.style.display='none'">
       </div>
       <h2 class="processing-title">جاري البحث عن صورك...</h2>
-      <p class="hint">يرجى الانتظار لثوانٍ قليلة ✨</p>
+      <p class="hint" id="processing-hint">جاري مطابقة وجهك مع الصور ✨</p>
+      <p id="debug-status" style="font-size:13px;color:#bbb;margin-top:10px;min-height:20px;"></p>
     </div>
   </div>
 
@@ -104,19 +66,15 @@
       <span id="results-label" class="header-title"></span>
       <div style="width:180px"></div>
     </div>
-    <p class="results-sub">اضغط على أي صورة لتحميلها 👇</p>
-    <div id="results-grid" class="results-grid"></div>
-    <div id="drive-bar" class="drive-bar" style="display:none">
-      <div id="drive-qr-box" class="drive-qr-box"></div>
-      <div class="drive-bar-text">
-        <div class="drive-bar-title">امسح لفتح معرض صورك</div>
-        <div class="drive-bar-sub">قمرة · حفظ بجودة أصلية · صورك فقط</div>
+    <div id="results-qr-wrap" style="display:flex;align-items:center;gap:16px;padding:12px 20px;background:rgba(250,246,236,0.06);border-bottom:1px solid rgba(255,255,255,0.08);">
+      <div id="results-qr-box"></div>
+      <div style="flex:1">
+        <p style="margin:0;font-size:15px;font-weight:600;color:#FAF6EC;">📲 امسح لتحميل كل صورك دفعة واحدة</p>
+        <p style="margin:4px 0 0;font-size:12px;color:#bbb;">مجلد خاص بك على Google Drive</p>
       </div>
     </div>
-    <div class="reset-bar-wrap">
-      <div class="reset-bar-label">سيتم الإعادة تلقائياً خلال <span id="results-countdown">3:00</span></div>
-      <div class="reset-bar-track"><div id="results-bar" class="reset-bar-fill"></div></div>
-    </div>
+    <p class="results-sub">اضغط على أي صورة لعرضها 👇</p>
+    <div id="results-grid" class="results-grid"></div>
   </div>
 
   <!-- ══ Screen 6: Photo + QR ═════════════════════════════════════ -->
@@ -146,15 +104,8 @@
   <!-- Hidden canvas for capture -->
   <canvas id="snap-canvas" style="display:none"></canvas>
 
-  <!-- ══ Country Picker Overlay ════════════════════════════ -->
-  <div id="country-picker" class="country-picker-overlay" onclick="App.closeCountryPicker(event)">
-    <div class="country-picker-sheet">
-      <div class="country-picker-title">اختر رمز الدولة</div>
-      <div class="country-list" id="country-list"></div>
-    </div>
-  </div>
-
+  <script async src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

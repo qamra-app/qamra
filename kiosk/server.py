@@ -8,8 +8,9 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-app      = Flask(__name__)
-RAILWAY  = "https://qamra-production.up.railway.app"
+app        = Flask(__name__)
+RAILWAY    = "https://qamra-production.up.railway.app"
+EVENT_CODE = os.environ.get("EVENT_CODE", "")  # set per-wedding in .env
 BASE     = os.path.dirname(os.path.abspath(__file__))
 EXCEL    = os.path.join(BASE, "guests.xlsx")
 PDF      = os.path.join(BASE, "guests.pdf")
@@ -116,12 +117,15 @@ def proxy_match():
     with open(os.path.join(FACES, face_name), "wb") as fp:
         fp.write(photo_bytes)
 
+    phone      = request.form.get("phone", "")
+    event_code = request.form.get("event_code", EVENT_CODE)
     try:
         r = requests.post(
             f"{RAILWAY}/match",
             files={"photo": (f.filename or "selfie.jpg", photo_bytes,
                              f.content_type or "image/jpeg")},
-            timeout=30,
+            data={"phone": phone, "event_code": event_code},
+            timeout=120,
         )
         resp = r.json()
         resp["face_path"] = face_name
@@ -131,8 +135,8 @@ def proxy_match():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/folder-status/<session_id>", methods=["GET"])
-def proxy_folder_status(session_id):
+@app.route("/api/folder-status/<session_id>")
+def folder_status(session_id):
     try:
         r = requests.get(f"{RAILWAY}/folder-status/{session_id}", timeout=10)
         return jsonify(r.json()), r.status_code
@@ -171,5 +175,9 @@ def log_guest():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    print("\nQamra Kiosk -- http://localhost:5000\n")
+    import socket
+    ip = socket.gethostbyname(socket.gethostname())
+    print(f"\nQamra Kiosk — https://localhost:5000")
+    print(f"On other devices — https://{ip}:5000")
+    print(f"Railway backend: {RAILWAY}\n")
     app.run(host="0.0.0.0", port=5000, debug=False)
