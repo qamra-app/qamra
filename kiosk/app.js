@@ -292,10 +292,11 @@ const App = (() => {
         const data  = await res.json();
         matches     = data.matches    || [];
         faceKey     = data.face_path  || "";
-        folderUrl   = "";
+        folderUrl   = data.gallery_url || "";
         logGuest().catch(() => {});
         renderResults();
-        if (data.session_id) pollFolder(data.session_id);
+        if (folderUrl) renderFolderQR();
+        else if (data.session_id) pollFolder(data.session_id);
         return;
       } catch (e) {
         stopTicker();
