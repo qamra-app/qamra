@@ -1119,150 +1119,68 @@ def _gallery_html(event_name: str, token: str, event_code: str, file_ids: list, 
 <style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 :root{{
-  --bg:#F2EDE3;
-  --bg-alt:#E8E1D2;
-  --paper:#FAF6EC;
-  --ink:#1A1612;
-  --ink-soft:#4A413A;
-  --ink-mute:rgba(26,22,18,0.50);
-  --ink-faint:rgba(26,22,18,0.18);
-  --rule:rgba(26,22,18,0.14);
+  --bg:#F2EDE3;--bg-alt:#E8E1D2;--paper:#FAF6EC;
+  --ink:#1A1612;--ink-soft:#4A413A;--ink-mute:rgba(26,22,18,.50);
+  --ink-faint:rgba(26,22,18,.18);--rule:rgba(26,22,18,.14);
   --gold:#C9A96E;
-  --gold-soft:rgba(201,169,110,0.12);
 }}
 html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   font-family:'Inter Tight',-apple-system,sans-serif;
   -webkit-font-smoothing:antialiased;direction:rtl}}
 
-/* ── Header ── */
-.header{{
-  background:var(--paper);
-  border-bottom:1px solid var(--rule);
-  padding:28px 20px 22px;
-  text-align:center;
-}}
-.header-brand{{
-  font-family:'JetBrains Mono',monospace;
-  font-size:11px;letter-spacing:.22em;text-transform:uppercase;
-  color:var(--ink-mute);margin-bottom:10px;
-}}
-.header-event{{
-  font-family:'Instrument Serif',serif;
-  font-size:clamp(22px,6vw,34px);font-weight:400;font-style:italic;
-  color:var(--ink);margin-bottom:6px;line-height:1.2;
-}}
-.header-count{{
-  display:inline-flex;align-items:center;gap:8px;
-  font-family:'JetBrains Mono',monospace;
-  font-size:12px;letter-spacing:.12em;text-transform:uppercase;
-  color:var(--gold);margin-top:4px;
-}}
-.header-count::before{{content:"";display:block;width:16px;height:1px;background:var(--gold);opacity:.6}}
-.header-count::after{{content:"";display:block;width:16px;height:1px;background:var(--gold);opacity:.6}}
+.header{{background:var(--paper);border-bottom:1px solid var(--rule);padding:24px 20px 18px;text-align:center}}
+.header-brand{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-mute);margin-bottom:10px}}
+.header-event{{font-family:'Instrument Serif',serif;font-size:clamp(22px,6vw,34px);font-weight:400;font-style:italic;color:var(--ink);margin-bottom:6px;line-height:1.2}}
+.header-count{{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-top:4px}}
+.header-count::before,.header-count::after{{content:"";display:block;width:16px;height:1px;background:var(--gold);opacity:.6}}
 
-/* ── Action bar ── */
+/* ── Instruction banner ── */
+.tip{{
+  display:flex;align-items:center;gap:12px;
+  background:#1A1612;color:#FAF6EC;
+  padding:14px 20px;
+  font-family:'Inter Tight',sans-serif;font-size:15px;font-weight:500;
+  border-bottom:2px solid var(--gold);
+}}
+.tip-icon{{font-size:22px;flex-shrink:0}}
+.tip-text{{line-height:1.45}}
+.tip-text small{{display:block;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;color:rgba(250,246,236,.45);margin-top:3px}}
+
+/* ── Save-all bar ── */
 .action-bar{{
   display:flex;align-items:center;justify-content:space-between;
-  padding:12px 16px;
-  background:var(--bg-alt);
-  border-bottom:1px solid var(--rule);
-  gap:12px;
+  padding:10px 16px;background:var(--bg-alt);
+  border-bottom:1px solid var(--rule);gap:12px;
 }}
-.action-hint{{
-  font-family:'JetBrains Mono',monospace;
-  font-size:11px;letter-spacing:.08em;color:var(--ink-mute);
-}}
+.action-hint{{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;color:var(--ink-mute)}}
 .btn-save-all{{
-  display:inline-flex;align-items:center;gap:10px;
+  display:inline-flex;align-items:center;gap:8px;
   background:var(--ink);color:var(--bg);
-  border:none;padding:11px 20px;
-  font-family:'Inter Tight',sans-serif;
-  font-size:13px;font-weight:500;letter-spacing:.02em;
-  cursor:pointer;text-decoration:none;
-  white-space:nowrap;transition:background .15s;
-  flex-shrink:0;
+  border:none;padding:10px 18px;
+  font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:500;
+  cursor:pointer;text-decoration:none;white-space:nowrap;flex-shrink:0;
 }}
 .btn-save-all:active{{background:var(--ink-soft)}}
 
-/* ── Gallery grid ── */
-.gallery{{
-  display:grid;
-  grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
-  gap:3px;padding:3px;
-  background:var(--bg-alt);
+/* ── Gallery — single column on mobile ── */
+.gallery{{display:flex;flex-direction:column;gap:4px;padding:4px;background:var(--bg-alt)}}
+@media(min-width:600px){{
+  .gallery{{display:grid;grid-template-columns:repeat(2,1fr)}}
 }}
-@media(max-width:480px){{.gallery{{grid-template-columns:repeat(2,1fr)}}}}
 
-.photo-card{{
-  position:relative;aspect-ratio:4/3;overflow:hidden;
-  background:var(--bg-alt);cursor:pointer;
-}}
+.photo-card{{position:relative;width:100%;overflow:hidden;background:var(--bg-alt)}}
 .photo-card img{{
-  width:100%;height:100%;object-fit:contain;display:block;
-  background:var(--bg);transition:transform .3s ease;
+  width:100%;height:auto;display:block;
+  -webkit-touch-callout:default; /* allow iOS long-press menu */
 }}
-.photo-card:active img{{transform:scale(1.04)}}
-.photo-card .skeleton{{
-  position:absolute;inset:0;
+.skeleton{{
+  position:absolute;inset:0;height:260px;
   background:linear-gradient(90deg,var(--bg-alt) 25%,var(--rule) 50%,var(--bg-alt) 75%);
   background-size:200% 100%;animation:shimmer 1.4s infinite;
 }}
 @keyframes shimmer{{0%{{background-position:200% 0}}100%{{background-position:-200% 0}}}}
-.photo-card .overlay{{
-  position:absolute;bottom:0;left:0;right:0;
-  background:linear-gradient(to top,rgba(26,22,18,.75) 0%,transparent 100%);
-  padding:28px 8px 8px;
-  display:flex;align-items:flex-end;justify-content:center;
-}}
-.btn-save{{
-  display:inline-flex;align-items:center;justify-content:center;gap:6px;
-  background:rgba(250,246,236,.92);color:var(--ink);
-  border:none;padding:10px;width:100%;
-  font-family:'Inter Tight',sans-serif;font-size:13px;font-weight:600;
-  cursor:pointer;text-decoration:none;white-space:nowrap;
-}}
-.btn-save:active{{background:var(--paper)}}
 
-/* ── Lightbox ── */
-.lightbox{{
-  display:none;position:fixed;inset:0;
-  background:rgba(26,22,18,.96);z-index:1000;
-  flex-direction:column;align-items:center;justify-content:center;
-  padding:16px;
-}}
-.lightbox.open{{display:flex}}
-.lightbox-img-wrap{{display:flex;align-items:center;justify-content:center;flex:1;width:100%}}
-.lightbox img{{max-width:95vw;max-height:72vh;object-fit:contain}}
-.lightbox-close{{
-  position:absolute;top:14px;right:14px;
-  background:rgba(250,246,236,.1);border:none;
-  color:var(--paper);width:40px;height:40px;border-radius:50%;
-  cursor:pointer;display:flex;align-items:center;justify-content:center;
-  font-size:20px;
-}}
-.lightbox-close:active{{background:rgba(250,246,236,.2)}}
-.lightbox-footer{{
-  display:flex;align-items:center;flex-direction:column;gap:10px;padding-top:16px;
-  width:100%;max-width:340px;
-}}
-.lb-hint{{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.08em;color:rgba(250,246,236,.3);text-align:center}}
-.btn-lb-save{{
-  display:inline-flex;align-items:center;justify-content:center;gap:10px;
-  background:var(--gold);color:var(--ink);
-  border:none;padding:18px 24px;width:100%;
-  font-family:'Inter Tight',sans-serif;font-size:17px;font-weight:600;
-  cursor:pointer;text-decoration:none;letter-spacing:.01em;
-}}
-.btn-lb-save:active{{background:#b8945a}}
-
-/* ── Footer ── */
-.footer{{
-  text-align:center;padding:28px 16px;
-  font-family:'JetBrains Mono',monospace;
-  font-size:10px;letter-spacing:.16em;text-transform:uppercase;
-  color:var(--ink-faint);border-top:1px solid var(--rule);
-  background:var(--paper);
-}}
+.footer{{text-align:center;padding:24px 16px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);border-top:1px solid var(--rule);background:var(--paper)}}
 </style>
 </head>
 <body>
@@ -1273,66 +1191,26 @@ html,body{{min-height:100%;background:var(--bg);color:var(--ink);
   <div class="header-count">{len(file_ids)} صورة وجدناها لك</div>
 </div>
 
+<div class="tip">
+  <span class="tip-icon">👆</span>
+  <div class="tip-text">
+    اضغط مطولاً على أي صورة لحفظها في هاتفك
+    <small>ثم اختر &laquo;حفظ الصورة&raquo; أو &laquo;Save to Photos&raquo;</small>
+  </div>
+</div>
+
 <div class="action-bar">
-  <span class="action-hint">اضغط على أي صورة للمعاينة والحفظ</span>
-  <a class="btn-save-all" href="{zip_url}" download="قمرة-صورك.zip">
-    ↓ حفظ الكل ({len(file_ids)})
-  </a>
+  <span class="action-hint">أو حمّل كل صورك دفعة واحدة</span>
+  <a class="btn-save-all" href="{zip_url}" download="قمرة-صورك.zip">↓ حفظ الكل ({len(file_ids)})</a>
 </div>
 
 <div class="gallery" id="gallery"></div>
 
-<div class="lightbox" id="lightbox">
-  <button class="lightbox-close" onclick="closeLb()">✕</button>
-  <div class="lightbox-img-wrap"><img id="lb-img" src="" alt=""></div>
-  <div class="lightbox-footer">
-    <a class="btn-lb-save" id="lb-save" href="#" target="_blank" rel="noopener">
-      ↓ حفظ الصورة بجودة HD
-    </a>
-    <div class="lb-hint">جودة أصلية · لا يوجد ضغط</div>
-  </div>
-</div>
-
 <div class="footer">Powered by QAMRA · صورك بجودتها الأصلية</div>
 
 <script>
-const photos    = {photos_js};
-const APP_URL   = "{APP_URL}";
-const TOKEN     = "{token}";
-const EVENT_CODE = "{event_code}";
-
-function thumbUrl(id) {{
-  return APP_URL + '/photo/' + id;
-}}
-function lbUrl(id) {{
-  return 'https://drive.google.com/thumbnail?id=' + id + '&sz=w1920';
-}}
-function dlUrl(id) {{
-  return 'https://drive.google.com/uc?export=download&id=' + id;
-}}
-function viewUrl(id) {{
-  return APP_URL + '/photo/' + id + '/view';
-}}
-
-async function sendToWa() {{
-  const btn = document.getElementById('btn-send-wa');
-  btn.disabled = true;
-  btn.textContent = '⏳ جاري الإرسال...';
-  try {{
-    const r = await fetch(APP_URL + '/gallery/' + EVENT_CODE + '/g/' + TOKEN + '/send-to-wa', {{method: 'POST'}});
-    const d = await r.json();
-    if (r.ok) {{
-      btn.textContent = '✅ تم! تحقق من واتساب';
-    }} else {{
-      btn.disabled = false;
-      btn.textContent = '📨 أرسل لي الصور على واتساب';
-      alert(d.error || 'حصل خطأ، حاول مرة ثانية');
-    }}
-  }} catch(e) {{
-    btn.disabled = false;
-    btn.textContent = '📨 أرسل لي الصور على واتساب';
-  }}
-}}
+const photos   = {photos_js};
+const APP_URL  = "{APP_URL}";
 
 const gallery = document.getElementById('gallery');
 photos.forEach((p, i) => {{
@@ -1340,32 +1218,11 @@ photos.forEach((p, i) => {{
   card.className = 'photo-card';
   card.innerHTML = `
     <div class="skeleton" id="sk${{i}}"></div>
-    <img src="${{thumbUrl(p.id)}}" alt="" loading="lazy"
+    <img src="${{APP_URL + '/photo/' + p.id}}" alt="صورة ${{i+1}}" loading="lazy"
          onload="var s=document.getElementById('sk${{i}}');if(s)s.remove()"
-         onerror="var s=document.getElementById('sk${{i}}');if(s)s.style.opacity='.2'">
-    <div class="overlay">
-      <a class="btn-save" href="${{dlUrl(p.id)}}" target="_blank" rel="noopener"
-         onclick="event.stopPropagation()">↓ حفظ</a>
-    </div>`;
-  card.addEventListener('click', () => openLb(i));
+         onerror="var s=document.getElementById('sk${{i}}');if(s)s.style.opacity='.15'">`;
   gallery.appendChild(card);
 }});
-
-function openLb(i) {{
-  const p = photos[i];
-  document.getElementById('lb-img').src = lbUrl(p.id);
-  const s = document.getElementById('lb-save');
-  s.href = dlUrl(p.id);
-  document.getElementById('lightbox').classList.add('open');
-}}
-function closeLb() {{
-  document.getElementById('lightbox').classList.remove('open');
-}}
-document.getElementById('lightbox').addEventListener('click', e => {{
-  if (e.target === document.getElementById('lightbox')) closeLb();
-}});
-document.addEventListener('keydown', e => {{ if (e.key==='Escape') closeLb(); }});
-
 </script>
 </body>
 </html>"""
