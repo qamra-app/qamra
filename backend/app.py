@@ -1615,7 +1615,7 @@ let allIds = {all_ids_js};
 let loadedIds = {photos_js}.map(p => p.id);
 
 function thumbUrl(id) {{ return APP_URL + '/photo/' + id; }}
-function dlUrl(id) {{ return 'https://drive.google.com/uc?export=download&id=' + id; }}
+function dlUrl(id) {{ return APP_URL + '/photo/' + id + '/download'; }}
 function viewUrl(id) {{ return APP_URL + '/photo/' + id + '/view'; }}
 
 const gallery = document.getElementById('gallery');
@@ -2151,6 +2151,28 @@ def serve_photo(file_id):
     except Exception as e:
         print(f"[PHOTO] Error {file_id}: {e}", flush=True)
         return str(e), 500
+
+@app.route("/photo/<file_id>/download", methods=["GET"])
+def download_photo(file_id):
+    if not all(c.isalnum() or c in "-_" for c in file_id):
+        return "invalid id", 400
+    cached = os.path.join(MEDIA_DIR, f"cache_{file_id}.jpg")
+    if not os.path.exists(cached):
+        try:
+            raw = download_file(file_id)
+            if not save_jpeg(raw, cached):
+                return "download failed", 500
+        except Exception as e:
+            print(f"[DOWNLOAD] Error {file_id}: {e}", flush=True)
+            return str(e), 500
+    filename = f"قمرة-{file_id}.jpg"
+    for code in list(_state_cache.keys()):
+        fm = _state_cache[code].get("file_map", {})
+        if file_id in fm:
+            filename = fm[file_id].get("name", filename)
+            break
+    return send_file(cached, mimetype="image/jpeg", as_attachment=True, download_name=filename)
+
 
 @app.route("/photo/<file_id>/view", methods=["GET"])
 def photo_view(file_id):
