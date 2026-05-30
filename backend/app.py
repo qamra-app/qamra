@@ -2909,6 +2909,8 @@ def whatsapp_webhook():
         return "", 200
 
 def _handle_whatsapp():
+    if os.environ.get("WHATSAPP_BOT_ENABLED", "true").lower() != "true":
+        return "", 200
     data      = request.get_json(silent=True) or {}
     global _last_webhook
     _last_webhook = data
