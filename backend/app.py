@@ -610,7 +610,7 @@ def _auto_index_loop():
                 run_index(code)
             except Exception as e:
                 print(f"[AUTO-INDEX] {code} error: {e}", flush=True)
-        time.sleep(10)
+        time.sleep(3)
 
 threading.Thread(target=_auto_index_loop, daemon=True).start()
 
