@@ -2093,21 +2093,12 @@ html,body{{min-height:100vh;background:var(--bg);color:var(--ink);
     <a href="{selfie_url}" class="card">
       <span class="card-icon">📷</span>
       <div class="card-body">
-        <div class="badge badge-rec">★ الأفضل · موصى به</div>
         <div class="card-title">ابحث عن صورتك من هنا</div>
         <div class="card-sub">افتح الكاميرا · التقط سيلفي · شاهد صورك فوراً</div>
       </div>
       <span class="card-arrow">←</span>
     </a>
-    <a href="{wa_link}" target="_blank" class="card">
-      <span class="card-icon">💬</span>
-      <div class="card-body">
-        <div class="badge badge-new">✦ جديد</div>
-        <div class="card-title">ابحث عن صورتك عبر بوت واتساب</div>
-        <div class="card-sub">أرسل سيلفي على واتساب · احصل على رابط معرضك</div>
-      </div>
-      <span class="card-arrow">←</span>
-    </a>
+    {'<a href="' + wa_link + '" target="_blank" class="card"><span class="card-icon">💬</span><div class="card-body"><div class="badge badge-new">✦ جديد</div><div class="card-title">ابحث عن صورتك عبر بوت واتساب</div><div class="card-sub">أرسل سيلفي على واتساب · احصل على رابط معرضك</div></div><span class="card-arrow">←</span></a>' if event.get('whatsapp_enabled', True) else ''}
   </div>
 
   <div class="qr-section">
