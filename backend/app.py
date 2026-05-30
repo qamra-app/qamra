@@ -2627,12 +2627,13 @@ def admin_add_event():
 
     with _events_lock:
         _events[code] = {
-            "name":             data["name"],
-            "collection_id":    data["collection_id"],
-            "gdrive_folder_id": data["gdrive_folder_id"],
-            "drive_url":        data.get("drive_url", ""),
-            "kiosk_url":        data.get("kiosk_url", ""),
-            "date":             data.get("date", ""),
+            "name":              data["name"],
+            "collection_id":     data["collection_id"],
+            "gdrive_folder_id":  data["gdrive_folder_id"],
+            "drive_url":         data.get("drive_url", ""),
+            "kiosk_url":         data.get("kiosk_url", ""),
+            "date":              data.get("date", ""),
+            "whatsapp_enabled":  data.get("whatsapp_enabled", True),
         }
         save_events()
 
